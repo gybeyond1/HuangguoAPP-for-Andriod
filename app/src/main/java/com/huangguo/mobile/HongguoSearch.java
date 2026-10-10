@@ -16,7 +16,8 @@ import java.util.Set;
 final class HongguoSearch {
     private final OkHttpClient http;
     HongguoSearch(OkHttpClient http) { this.http = http; }
-    JSONObject search(String keyword) throws Exception {
+    JSONObject search(String keyword) throws Exception { return search(keyword, false); }
+    JSONObject search(String keyword, boolean sequelLookup) throws Exception {
         keyword = keyword.trim();
         if (keyword.isEmpty()) return new JSONObject().put("items", new JSONArray()).put("nextPage", JSONObject.NULL);
         if (keyword.length() > 80) throw new IllegalArgumentException("搜索词过长");
@@ -27,17 +28,21 @@ final class HongguoSearch {
             JSONObject loader = ContentRepository.Companion.extractRouter(response.body().string()).getJSONObject("loaderData");
             for (java.util.Iterator<String> keys = loader.keys(); keys.hasNext();) {
                 JSONObject section = loader.optJSONObject(keys.next());
-                if (section != null && section.has("searchList")) return parse(section, keyword);
+                if (section != null && section.has("searchList")) return parse(section, keyword, sequelLookup);
             }
             throw new IOException("搜索页面数据结构已变化");
         }
     }
     private static String normalize(String text) { return text.replaceAll("\\s+", "").toLowerCase(Locale.ROOT); }
-    static JSONObject parse(JSONObject section, String keyword) throws Exception {
+    static JSONObject parse(JSONObject section, String keyword) throws Exception { return parse(section, keyword, false); }
+    private static String normalized(String value, boolean sequelLookup) {
+        return sequelLookup ? normalize(value).replaceAll("[\\p{P}\\p{Z}]", "") : normalize(value);
+    }
+    private static JSONObject parse(JSONObject section, String keyword, boolean sequelLookup) throws Exception {
         if (!section.optBoolean("isSuccess", true)) throw new IOException("搜索服务暂不可用，请重试");
         JSONArray rows = section.getJSONArray("searchList"), items = new JSONArray();
         Set<String> ids = new HashSet<>();
-        String query = normalize(keyword);
+        String query = normalized(keyword, sequelLookup);
         for (int i = 0; i < rows.length(); i++) {
             JSONObject row = rows.optJSONObject(i), video = row == null ? null : row.optJSONObject("video_data");
             if (video == null) continue;
@@ -45,7 +50,7 @@ final class HongguoSearch {
             String genre = video.optString("genre");
             String type = "203".equals(genre) ? "short" : "205".equals(genre) ? "comic" : "";
             // The website may append unrelated recommendations; never present them as matches.
-            if (type.isEmpty() || !id.matches("[0-9]{1,30}") || !normalize(title).contains(query) || !ids.add(id)) continue;
+            if (type.isEmpty() || !id.matches("[0-9]{1,30}") || !normalized(title, sequelLookup).contains(query) || !ids.add(id)) continue;
             JSONArray tags = new JSONArray(), categories = video.optJSONArray("category_list");
             if (categories != null) for (int j = 0; j < categories.length(); j++) {
                 JSONObject category = categories.optJSONObject(j);

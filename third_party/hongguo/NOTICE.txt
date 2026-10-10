@@ -1,4 +1,4 @@
-# 红果内容接入来源
+红果内容接入来源
 
 来源：N3urda/hongguoTV，提交 eea73e6a45569a2cbbb9440f7cd5290c459b0b70。
 上游：https://github.com/N3urda/hongguoTV

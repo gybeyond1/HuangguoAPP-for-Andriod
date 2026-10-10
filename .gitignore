@@ -14,3 +14,12 @@ archives/
 verification/
 
 qa/*-browser/
+
+# Local notes and generated evidence
+*.md
+!/README.md
+qa/
+*.log
+__pycache__/
+.local-docs/
+Android Version/

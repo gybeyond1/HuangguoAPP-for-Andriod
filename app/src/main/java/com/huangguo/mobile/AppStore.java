@@ -15,6 +15,7 @@ import java.util.Set;
 
 final class AppStore {
     private static final int HISTORY_LIMIT = 50;
+    private static final int CONTENT_CACHE_LIMIT = 80;
     private final SharedPreferences preferences;
     final String source;
 
@@ -69,7 +70,23 @@ final class AppStore {
 
     synchronized void saveCache(String key, JSONObject data) throws Exception {
         JSONObject entry = new JSONObject().put("at", System.currentTimeMillis()).put("data", data);
-        preferences.edit().putString("cache:" + key, entry.toString()).apply();
+        String updatedKey = "cache:" + key;
+        SharedPreferences.Editor editor = preferences.edit().putString(updatedKey, entry.toString());
+        Map<String, Long> timestamps = new HashMap<>();
+        for (Map.Entry<String, ?> saved : preferences.getAll().entrySet()) {
+            String name = saved.getKey();
+            if (!name.startsWith("cache:") || "cache:home".equals(name) || name.equals(updatedKey)) continue;
+            try { timestamps.put(name, new JSONObject(String.valueOf(saved.getValue())).optLong("at")); }
+            catch (Exception invalid) { editor.remove(name); }
+        }
+        int capacity = "home".equals(key) ? CONTENT_CACHE_LIMIT : CONTENT_CACHE_LIMIT - 1;
+        if (timestamps.size() > capacity) {
+            ArrayList<String> oldest = new ArrayList<>(timestamps.keySet());
+            oldest.sort(Comparator.comparingLong(timestamps::get));
+            int excess = timestamps.size() - capacity;
+            for (int i = 0; i < excess; i++) editor.remove(oldest.get(i));
+        }
+        editor.apply();
     }
 
     synchronized void clearCache() {
@@ -112,6 +129,16 @@ final class AppStore {
 
     synchronized JSONObject getProgress(String id, int episode) {
         return object("progress").optJSONObject(id + ":" + episode);
+    }
+
+    synchronized JSONObject latestProgress(String id) {
+        JSONObject all=object("progress"), latest=null;
+        for (java.util.Iterator<String> keys=all.keys(); keys.hasNext();) {
+            JSONObject value=all.optJSONObject(keys.next());
+            if (value!=null && id.equals(value.optString("id"))
+                    && (latest==null || value.optLong("updatedAt")>latest.optLong("updatedAt"))) latest=value;
+        }
+        return latest;
     }
 
     synchronized void recordProgress(JSONObject input) throws Exception {

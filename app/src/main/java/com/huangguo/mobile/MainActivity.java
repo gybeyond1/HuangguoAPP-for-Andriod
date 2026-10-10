@@ -46,6 +46,8 @@ public final class MainActivity extends Activity {
     private static final String TAG = "HuangGuo";
     private static final int AVATAR_PICKER = 7101;
     private final ExecutorService requests = Executors.newFixedThreadPool(4);
+    private final ExecutorService localRequests = Executors.newSingleThreadExecutor();
+    private final ExecutorService coverRequests = Executors.newFixedThreadPool(2);
     private WebView webView;
     private FrameLayout root;
     private DualContentRepository repository;
@@ -437,6 +439,8 @@ public final class MainActivity extends Activity {
         }
         hotHandler.removeCallbacksAndMessages(null);
         requests.shutdownNow();
+        localRequests.shutdownNow();
+        coverRequests.shutdownNow();
         if (webView != null) {
             webView.removeJavascriptInterface("AndroidHost");
             webView.destroy();
@@ -599,7 +603,9 @@ public final class MainActivity extends Activity {
         }
 
         @JavascriptInterface public void request(String requestId, String action, String argsText) {
-            requests.execute(() -> {
+            ExecutorService executor = "cached".equals(action) ? localRequests
+                    : "cover".equals(action) ? coverRequests : requests;
+            executor.execute(() -> {
                 try {
                     JSONObject args = new JSONObject(argsText);
                     Object result = dispatch(action, args);

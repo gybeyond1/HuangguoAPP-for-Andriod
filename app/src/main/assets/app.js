@@ -50,7 +50,7 @@ const tagGroups = [
 const state = {
   route: 'home', tab: 'home', sub: { adult: 0, ai: 0 }, home: null,
   category: null, categoryItems: [], detail: null, detailLoading: false, sourceItem: null,
-  search: null, query: '', filter: 'all', banner: 0, categoryBanner: 0,
+  search: null, searchPending: false, searchError: '', query: '', filter: 'all', banner: 0, categoryBanner: 0,
   listing: null, tags: null, tagsReturn: null, listingReturn: null, settingsReturn: null,
   libraryTab: 'history', libraryQuery: '', accountReturn: null, account: { loggedIn: false },
   sourceGroup: '', sourceQueue: [], previous: null, compactHeld: false
@@ -809,7 +809,7 @@ function renderSearch() {
     if (state.filter === 'ai-manju') return /漫剧/.test(title);
     return !/AI\s*(换脸|魔改)|漫剧/.test(title);
   });
-  content.innerHTML = `<div class="search-page"><h1>搜索结果</h1><p>${esc(state.query)} · ${items.length} 部作品</p><div class="filter-row">${filters.map(([id, label]) => `<button type="button" data-filter="${id}" class="${state.filter === id ? 'active' : ''}">${label}</button>`).join('')}</div>
+  content.innerHTML = `<div class="search-page"><h1>搜索结果</h1><p>${esc(state.query)} · ${items.length} 部作品</p>${searchFeedback()}<div class="filter-row">${filters.map(([id, label]) => `<button type="button" data-filter="${id}" class="${state.filter === id ? 'active' : ''}">${label}</button>`).join('')}</div>
     ${items.length ? `<div class="search-grid">${items.map(itemCard).join('')}</div>` : '<div class="empty-state">没有找到匹配的影片</div>'}</div>`;
   hydrateImages();
 }
@@ -872,6 +872,14 @@ function renderDetail() {
   hydrateImages();
 }
 
+function searchFeedback() {
+  if (state.searchPending) return '<div class="search-feedback" role="status" aria-live="polite"><span class="search-spinner" aria-hidden="true"></span><span>正在更新搜索结果…</span></div>';
+  if (state.searchError) return `<div class="search-feedback search-feedback--error" role="status"><span>更新失败，当前显示缓存结果</span><button type="button" data-retry="search">重试</button></div>`;
+  return '';
+}
+function renderSearchLoading() {
+  content.innerHTML = `<section class="search-loading" role="status" aria-live="polite" aria-busy="true"><span class="search-spinner search-spinner--large" aria-hidden="true"></span><h1>正在搜索…</h1><p>${esc(state.query)}</p></section>`;
+}
 function renderSkeleton() {
   content.innerHTML = '<div class="skeleton-home" role="status" aria-label="正在加载内容"><div class="skeleton skeleton-hero"></div><div class="skeleton skeleton-title"></div><div class="skeleton-row"><div class="skeleton skeleton-poster"></div><div class="skeleton skeleton-poster"></div><div class="skeleton skeleton-poster"></div></div><div class="skeleton skeleton-line"></div></div>';
 }
@@ -1291,7 +1299,7 @@ async function goLibrary(tab = 'history') {
   if (state.route === 'home') rememberScreen();
   state.libraryTab = tab;
   setRoute('library'); state.tab = 'library'; setNav('library'); renderSkeleton();
-  try { state.library = await api('library'); if (token === routeToken) renderLibrary(); }
+  try { const library = await api('library'); if (token !== routeToken) return; state.library = library; renderLibrary(); }
   catch (error) { if (token === routeToken) renderError(error, 'library'); }
 }
 
@@ -1314,13 +1322,33 @@ async function goSearch(query) {
   if (state.route === 'home') rememberScreen();
   state.previous = { route: state.route, tab: state.tab };
   setRoute('search'); state.query = query.trim(); state.filter = 'all'; state.search = null;
+  state.searchPending = true; state.searchError = '';
+  scroll.scrollTop = 0;
+  renderSearchLoading();
+  let settled = false;
+  let timeout;
   const refreshing = api('search', { query: state.query });
-  const cached = await api('cached', { key: `search:${state.query}` }).catch(() => null);
-  if (token !== routeToken) return;
-  state.search = cached?.data || null;
-  if (state.search) renderSearch(); else renderSkeleton();
-  try { const fresh = await refreshing; if (token === routeToken) { state.search = fresh; renderSearch(); } }
-  catch (error) { if (!state.search && token === routeToken) renderError(error, 'search'); }
+  api('cached', { key: `search:${state.query}` }).then(cached => {
+    if (settled || token !== routeToken || !cached?.data) return;
+    state.search = cached.data;
+    renderSearch();
+  }).catch(() => {});
+  try {
+    const fresh = await Promise.race([refreshing, new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error('搜索连接超时，请重试')), 25000);
+    })]);
+    if (token !== routeToken) return;
+    state.searchPending = false; state.search = fresh;
+    renderSearch();
+  } catch (error) {
+    if (token !== routeToken) return;
+    state.searchPending = false;
+    if (state.search) { state.searchError = error.message || '搜索刷新失败'; renderSearch(); }
+    else renderError(error, 'search');
+  } finally {
+    settled = true;
+    clearTimeout(timeout);
+  }
 }
 
 function sourceItem(id) {

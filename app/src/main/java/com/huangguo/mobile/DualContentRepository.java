@@ -31,5 +31,21 @@ final class DualContentRepository {
     JSONObject tagListing(String slug, int page) throws Exception {
         return privateMode() ? huangguo.tagListing(slug, page) : hongguo.tagListing(slug, page);
     }
+    org.json.JSONArray sequelCandidates(JSONObject item) throws Exception {
+        org.json.JSONArray result = new org.json.JSONArray();
+        if (privateMode()) return result;
+        String title = item.optString("title"), query = SequelMatcher.query(title);
+        if (query.isEmpty()) return result;
+        org.json.JSONArray rows = hongguo.searchSequels(query).optJSONArray("items");
+        if (rows == null) return result;
+        for (int i=0; i<rows.length(); i++) {
+            JSONObject row=rows.optJSONObject(i);
+            if (row == null || row.optString("id").equals(item.optString("id"))) continue;
+            String category=item.optString("category");
+            if (("short".equals(category) || "comic".equals(category)) && !category.equals(row.optString("category"))) continue;
+            if (SequelMatcher.matches(title,row.optString("title"))) result.put(row);
+        }
+        return result;
+    }
     void clearCovers() { if (privateMode()) huangguo.clearCovers(); }
 }

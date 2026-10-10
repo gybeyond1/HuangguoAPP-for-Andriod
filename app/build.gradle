@@ -10,8 +10,8 @@ android {
         applicationId 'com.huangguo.mobile'
         minSdk 26
         targetSdk 36
-        versionCode 45
-        versionName '0.3.10'
+        versionCode 48
+        versionName '0.3.13'
         testInstrumentationRunner 'com.huangguo.mobile.PlaybackTestRunner'
     }
 

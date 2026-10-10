@@ -69,6 +69,12 @@ public final class PlayerActivity extends Activity {
     };
     private final ExecutorService prefetchWorker = Executors.newSingleThreadExecutor();
     private Future<?> sourceTask;
+    private Future<?> sequelTask;
+    private final Map<String, JSONArray> sequelCache = new HashMap<>();
+    private JSONArray sequelCandidates = new JSONArray();
+    private LinearLayout sequelOverlay;
+    private boolean seasonEnded;
+    private boolean openingSequel;
     private Future<?> prefetchTask;
     private int prefetchToken;
     private boolean foreground;
@@ -273,6 +279,7 @@ public final class PlayerActivity extends Activity {
             @Override public void onPlaybackStateChanged(int state) {
                 if (engine != player || currentSource == null || destroyed) return;
                 if (state == Player.STATE_READY) {
+                    if (seasonEnded) { seasonEnded=false; hideSequelEnd(); }
                     if (activeFirstFrame) loading.setVisibility(View.GONE);
                     message.setVisibility(View.GONE);
                     maybePrepareNext();
@@ -284,6 +291,7 @@ public final class PlayerActivity extends Activity {
                     if (!isAiQueue()) {
                         Selection next = adjacent(1);
                         if (next != null) switchTo(next);
+                        else if (isHongguoFinalEpisode()) { seasonEnded = true; showSequelEnd(false); }
                     }
                 }
             }
@@ -904,6 +912,165 @@ public final class PlayerActivity extends Activity {
         });
     }
 
+    private boolean isHongguoFinalEpisode() {
+        return !ContentMode.PRIVATE.equals(store.source) && !isAiQueue() && episodes.length()>0
+                && episodes.optJSONObject(episodes.length()-1)!=null
+                && currentEpisode==episodes.optJSONObject(episodes.length()-1).optInt("number");
+    }
+    private void prepareSequels() {
+        if (sequelTask!=null) sequelTask.cancel(true);
+        sequelCandidates=new JSONArray();
+        if (!isHongguoFinalEpisode()) return;
+        String id=currentItem.optString("id");
+        JSONArray cached=sequelCache.get(id);
+        if(cached!=null) { sequelCandidates=cached; return; }
+        JSONObject item=currentItem;
+        sequelTask=worker.submit(() -> {
+            JSONArray rows;
+            try { rows=repository.sequelCandidates(item); } catch(Exception ignored) { rows=new JSONArray(); }
+            if(Thread.currentThread().isInterrupted()) return;
+            JSONArray ready=rows;
+            runOnUiThread(() -> {
+                if(destroyed || isFinishing() || !id.equals(currentItem.optString("id")) || !isHongguoFinalEpisode()) return;
+                sequelCache.put(id,ready);
+                sequelCandidates=ready;
+                if(seasonEnded) showSequelEnd(false);
+            });
+        });
+    }
+    private void hideSequelEnd() {
+        if(sequelOverlay!=null) { root.removeView(sequelOverlay); sequelOverlay=null; }
+    }
+    private int sequelEpisode(JSONObject item, JSONArray list) {
+        JSONObject progress=store.latestProgress(item.optString("id"));
+        int number=progress==null?1:progress.optInt("episode",1);
+        if(progress!=null && progress.optBoolean("completed") && number<list.length()) number++;
+        for(int i=0;i<list.length();i++) if(list.optJSONObject(i).optInt("number")==number) return number;
+        return list.length()>0?list.optJSONObject(0).optInt("number",1):1;
+    }
+    private void openSequel(JSONObject item) {
+        if(openingSequel) return;
+        openingSequel=true;
+        String previousId=currentItem.optString("id");
+        worker.submit(() -> {
+            try {
+                JSONObject detail=repository.detail(item.optString("id"));
+                JSONArray list=detail.getJSONArray("episodes");
+                if(list.length()==0) throw new IllegalStateException("没有分集");
+                runOnUiThread(() -> {
+                    if(destroyed || isFinishing() || !seasonEnded || !previousId.equals(currentItem.optString("id"))) return;
+                    saveProgress(true);
+                    currentSource=null;
+                    episodes=list;
+                    switchTo(new Selection(item,0,sequelEpisode(item,list)));
+                });
+            } catch(Exception ignored) {
+                runOnUiThread(() -> {
+                    if(destroyed || !previousId.equals(currentItem.optString("id"))) return;
+                    openingSequel=false;
+                    if(seasonEnded) showSequelEnd(false);
+                    toast("续作加载失败，请再试一次");
+                });
+            }
+        });
+    }
+    private void addSequelCard(LinearLayout parent, JSONObject item) {
+        LinearLayout card=new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16),dp(16),dp(16),dp(16));
+        card.setBackground(background(0xF0252527,16));
+        LinearLayout row=new LinearLayout(this);
+        ImageView cover=new ImageView(this);
+        cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        cover.setBackground(background(0xFF383638,8));
+        cover.setClipToOutline(true);
+        row.addView(cover,new LinearLayout.LayoutParams(dp(78),dp(106)));
+        loadPoster(item,cover);
+        LinearLayout info=new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams infoParams=new LinearLayout.LayoutParams(0,-1,1);
+        infoParams.leftMargin=dp(14);
+        row.addView(info,infoParams);
+        info.addView(label("可能的续作",12,0xFFFFAD70));
+        TextView name=label(item.optString("title"),17,Color.WHITE);
+        name.setTypeface(null,Typeface.BOLD);
+        name.setMaxLines(2);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams nameParams=new LinearLayout.LayoutParams(-1,-2);
+        nameParams.topMargin=dp(6);
+        info.addView(name,nameParams);
+        String count=item.optString("episodeLabel");
+        if(!count.isEmpty()) info.addView(label(count,13,0xFFD5D0CD));
+        JSONObject progress=store.latestProgress(item.optString("id"));
+        if(progress!=null) {
+            TextView hint=label("上次看到第 "+progress.optInt("episode",1)+" 集 · "+clock(progress.optLong("position")),12,0xFFD5D0CD);
+            LinearLayout.LayoutParams hintParams=new LinearLayout.LayoutParams(-1,-2);
+            hintParams.topMargin=dp(8);
+            info.addView(hint,hintParams);
+        }
+        card.addView(row,new LinearLayout.LayoutParams(-1,dp(128)));
+        TextView action=label(progress==null?"查看续作":"继续观看续作",16,Color.BLACK);
+        action.setTypeface(null,Typeface.BOLD);
+        action.setGravity(Gravity.CENTER);
+        action.setBackground(background(0xFFFF882C,12));
+        action.setOnClickListener(v -> {
+            if(openingSequel) return;
+            action.setText("正在加载续作…");
+            action.setEnabled(false);
+            openSequel(item);
+        });
+        LinearLayout.LayoutParams buttonParams=new LinearLayout.LayoutParams(-1,dp(48));
+        buttonParams.topMargin=dp(14);
+        card.addView(action,buttonParams);
+        LinearLayout.LayoutParams cardParams=new LinearLayout.LayoutParams(-1,-2);
+        cardParams.topMargin=dp(12);
+        parent.addView(card,cardParams);
+    }
+    private void showSequelEnd(boolean list) {
+        hideSequelEnd();
+        revealControls();
+        handler.removeCallbacks(hideControls);
+        centerToggle.setVisibility(View.GONE);
+        sequelOverlay=new LinearLayout(this);
+        sequelOverlay.setOrientation(LinearLayout.VERTICAL);
+        sequelOverlay.setPadding(dp(20),dp(18),dp(20),dp(18));
+        sequelOverlay.setBackground(background(0xA8000000,18));
+        sequelOverlay.setClickable(true);
+        TextView heading=label("本季已看完",22,Color.WHITE);
+        heading.setTypeface(null,Typeface.BOLD);
+        heading.setGravity(Gravity.CENTER);
+        sequelOverlay.addView(heading,new LinearLayout.LayoutParams(-1,-2));
+        if(sequelCandidates.length()==1) {
+            ScrollView scroll=new ScrollView(this);
+            LinearLayout cards=new LinearLayout(this);
+            cards.setOrientation(LinearLayout.VERTICAL);
+            addSequelCard(cards,sequelCandidates.optJSONObject(0));
+            scroll.addView(cards);
+            int room=Math.max(dp(96),root.getHeight()-dp(280));
+            sequelOverlay.addView(scroll,new LinearLayout.LayoutParams(-1,Math.min(dp(238),room)));
+        }
+        else if(sequelCandidates.length()>1 && !list) {
+            TextView action=label("查看可能的续作（"+sequelCandidates.length()+"）",16,Color.BLACK);
+            action.setGravity(Gravity.CENTER);
+            action.setBackground(background(0xFFFF882C,12));
+            action.setOnClickListener(v -> showSequelEnd(true));
+            LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,dp(48));
+            params.topMargin=dp(18);
+            sequelOverlay.addView(action,params);
+        } else if(list) {
+            ScrollView scroll=new ScrollView(this);
+            LinearLayout cards=new LinearLayout(this);
+            cards.setOrientation(LinearLayout.VERTICAL);
+            for(int i=0;i<sequelCandidates.length();i++) addSequelCard(cards,sequelCandidates.optJSONObject(i));
+            scroll.addView(cards);
+            sequelOverlay.addView(scroll,new LinearLayout.LayoutParams(-1,Math.min(dp(300),Math.max(dp(96),root.getHeight()-dp(280)))));
+        }
+        int availableWidth=(int)(getResources().getDisplayMetrics().widthPixels/getResources().getDisplayMetrics().density);
+        FrameLayout.LayoutParams params=new FrameLayout.LayoutParams(dp(Math.min(400,availableWidth-32)),-2,Gravity.CENTER);
+        root.addView(sequelOverlay,params);
+    }
+
     private long resumePosition(String id, int episode) {
         JSONObject progress = store.getProgress(id, episode);
         if (progress == null || progress.optBoolean("completed")) return 0;
@@ -912,6 +1079,10 @@ public final class PlayerActivity extends Activity {
     }
 
     private void loadSelection() {
+        hideSequelEnd();
+        seasonEnded = false;
+        openingSequel = false;
+        prepareSequels();
         final int token = ++loadToken;
         final String id = currentItem.optString("id");
         final int episode = currentEpisode;
@@ -1361,6 +1532,7 @@ public final class PlayerActivity extends Activity {
         updateControlLayout();
         root.requestApplyInsets();
         updateSystemBars();
+        if (seasonEnded) showSequelEnd(false);
     }
 
     private void updateMiniProgress(long position, long duration) {
@@ -1437,6 +1609,7 @@ public final class PlayerActivity extends Activity {
     }
 
     private void concealControls() {
+        if (seasonEnded) return;
         if (!controlsShown) return;
         controlsShown = false;
         updateTitleVisibility();
@@ -1488,12 +1661,13 @@ public final class PlayerActivity extends Activity {
             handler.postDelayed(hideCenterToggle, 3000);
         } else if (centerToggle != null) centerToggle.setVisibility(View.GONE);
         handler.removeCallbacks(hideControls);
+        if (seasonEnded) { centerToggle.setVisibility(View.GONE); return; }
         if (!episodesOpen && !seeking && gestureMode != GESTURE_HOLD && speedPanel == null)
             handler.postDelayed(hideControls, 3000);
     }
 
     private final Runnable hideControls = () -> {
-        if (controls != null && !seeking && gestureMode != GESTURE_HOLD && speedPanel == null)
+        if (controls != null && !seasonEnded && !seeking && gestureMode != GESTURE_HOLD && speedPanel == null)
             concealControls();
     };
     private final Runnable hideCenterToggle = () -> { if (centerToggle != null) centerToggle.setVisibility(View.GONE); };
@@ -1582,6 +1756,7 @@ public final class PlayerActivity extends Activity {
 
     @Override protected void onDestroy() {
         destroyed = true;
+        if (sequelTask != null) sequelTask.cancel(true);
         ++loadToken;
         cancelPrefetch();
         stopSeekPreview();

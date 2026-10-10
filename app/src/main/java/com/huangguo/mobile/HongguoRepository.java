@@ -12,12 +12,11 @@ import okhttp3.Request;
 import okhttp3.Response;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import android.util.LruCache;
 
 final class HongguoRepository {
     private final ContentRepository upstream = new ContentRepository(new OkHttpClient(), System::currentTimeMillis);
-    private final Map<String, Detail> details = new ConcurrentHashMap<>();
+    private final LruCache<String, Detail> details = new LruCache<>(32);
     private final HongguoGenres genres = new HongguoGenres(upstream.getHttp());
     private final HongguoSearch search = new HongguoSearch(upstream.getHttp());
 
@@ -51,6 +50,7 @@ final class HongguoRepository {
     JSONObject search(String keyword) throws Exception {
         return search.search(keyword);
     }
+    JSONObject searchSequels(String keyword) throws Exception { return search.search(keyword, true); }
     JSONObject detail(String id) throws Exception {
         Detail detail = upstream.detail(id);
         details.put(id, detail);
