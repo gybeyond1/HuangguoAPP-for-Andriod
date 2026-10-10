@@ -611,10 +611,13 @@ public final class MainActivity extends Activity {
                     String script = "window.NativeCallbacks.resolve(" + JSONObject.quote(requestId) + "," + data + ")";
                     String authUserId = ("login".equals(action) || "register".equals(action)) && result instanceof JSONObject
                             ? ((JSONObject) result).optString("userId") : "";
+                    final AccountService profileService = "account".equals(action) ? account : null;
+                    String profileUserId = profileService != null && result instanceof JSONObject ? ((JSONObject) result).optString("userId") : "";
                     runOnUiThread(() -> {
                         if (isDestroyed() || webView == null) return;
                         webView.evaluateJavascript(script, null);
                         if (!authUserId.isEmpty()) refreshAccountAfterAuth(authUserId);
+                        if (!profileUserId.isEmpty()) refreshAccountSilently(profileService, profileUserId);
                     });
                 } catch (Exception error) {
                     Log.e(TAG, action + " failed", error);
@@ -632,11 +635,25 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> webView.evaluateJavascript("window.hgCloudSynced && window.hgCloudSynced()", null));
             } catch (Exception error) { Log.w(TAG, "登录后片单稍后同步", error); }
             try {
-                JSONObject refreshed = account.profile();
+                JSONObject refreshed = account.refreshProfile();
                 if (!userId.equals(refreshed.optString("userId"))) return;
                 String script = "window.hgAccountRefreshed && window.hgAccountRefreshed(" + refreshed + ")";
                 runOnUiThread(() -> webView.evaluateJavascript(script, null));
             } catch (Exception error) { Log.w(TAG, "登录后账号资料稍后刷新", error); }
+        });
+    }
+
+    private void refreshAccountSilently(AccountService service, String userId) {
+        requests.execute(() -> {
+            try {
+                JSONObject refreshed = service.refreshProfile();
+                ParseUser current = ParseUser.getCurrentUser();
+                if (current == null || !userId.equals(current.getObjectId()) || !userId.equals(refreshed.optString("userId"))) return;
+                runOnUiThread(() -> {
+                    if (!isDestroyed() && webView != null) webView.evaluateJavascript(
+                            "window.hgAccountRefreshed && window.hgAccountRefreshed(" + refreshed + ")", null);
+                });
+            } catch (Exception error) { Log.w(TAG, "账号后台刷新稍后重试", error); }
         });
     }
 }

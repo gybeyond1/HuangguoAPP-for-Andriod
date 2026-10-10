@@ -30,28 +30,33 @@ import java.util.Set;
 final class AccountService {
     private final Context context;
     private final AppStore store;
-    private long lastProfileRefresh;
+    private volatile long lastProfileRefresh;
+    private final java.util.concurrent.atomic.AtomicBoolean refreshingProfile = new java.util.concurrent.atomic.AtomicBoolean();
 
     AccountService(Context context, AppStore store) {
         this.context = context.getApplicationContext();
         this.store = store;
     }
 
-    synchronized JSONObject profile() throws Exception {
-        return profile(true);
+    JSONObject profile() throws Exception {
+        return profile(false);
+    }
+
+    JSONObject refreshProfile() throws Exception {
+        if (!refreshingProfile.compareAndSet(false, true)) return profile(false);
+        try { return profile(true); }
+        finally { refreshingProfile.set(false); }
     }
 
     private JSONObject profile(boolean refreshRemote) throws Exception {
         ParseUser user = ParseUser.getCurrentUser();
         if (user == null) {
-            store.activateUser("");
             return new JSONObject().put("loggedIn", false);
         }
         if (refreshRemote && System.currentTimeMillis() - lastProfileRefresh > 5 * 60_000) try {
             user.fetch();
             lastProfileRefresh = System.currentTimeMillis();
         } catch (Exception ignored) { /* 离线时使用本地账号资料 */ }
-        store.activateUser(user.getObjectId());
         JSONObject result = new JSONObject().put("loggedIn", true)
                 .put("username", user.getUsername()).put("userId", user.getObjectId());
         File avatar = new File(new File(context.getFilesDir(), "avatars"), user.getObjectId() + ".jpg");
@@ -61,8 +66,7 @@ final class AccountService {
             String remoteName = remote.getName();
             if (refreshRemote && (!avatar.isFile() || !remoteName.equals(markers.getString(user.getObjectId(), "")))) try {
                 byte[] data = remote.getData();
-                avatar.getParentFile().mkdirs();
-                try (FileOutputStream output = new FileOutputStream(avatar)) { output.write(data); }
+                saveAvatar(avatar, data);
                 markers.edit().putString(user.getObjectId(), remoteName).apply();
             } catch (Exception ignored) { /* 离线时先显示默认头像 */ }
         }
@@ -71,6 +75,16 @@ final class AccountService {
             result.put("avatar", "data:image/jpeg;base64," + Base64.encodeToString(data, Base64.NO_WRAP));
         }
         return result;
+    }
+
+    private static void saveAvatar(File target, byte[] data) throws Exception {
+        target.getParentFile().mkdirs();
+        File temporary = File.createTempFile("avatar-", ".tmp", target.getParentFile());
+        try {
+            try (FileOutputStream output = new FileOutputStream(temporary)) { output.write(data); }
+            java.nio.file.Files.move(temporary.toPath(), target.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } finally { if (temporary.exists()) temporary.delete(); }
     }
 
     synchronized JSONObject register(String username, String password) throws Exception {
@@ -217,8 +231,7 @@ final class AccountService {
         user.put("avatar", avatar);
         user.save();
         File local = new File(new File(context.getFilesDir(), "avatars"), user.getObjectId() + ".jpg");
-        local.getParentFile().mkdirs();
-        try (FileOutputStream output = new FileOutputStream(local)) { output.write(bytes); }
+        saveAvatar(local, bytes);
         context.getSharedPreferences("huangguo-avatars", Context.MODE_PRIVATE)
                 .edit().putString(user.getObjectId(), avatar.getName()).apply();
         return profile();

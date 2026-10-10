@@ -19,6 +19,7 @@ final class HongguoRepository {
     private final ContentRepository upstream = new ContentRepository(new OkHttpClient(), System::currentTimeMillis);
     private final Map<String, Detail> details = new ConcurrentHashMap<>();
     private final HongguoGenres genres = new HongguoGenres(upstream.getHttp());
+    private final HongguoSearch search = new HongguoSearch(upstream.getHttp());
 
     JSONObject tags() throws Exception { return genres.tags(); }
     JSONObject tagListing(String slug, int page) throws Exception { return genres.listing(slug, page); }
@@ -48,12 +49,7 @@ final class HongguoRepository {
     }
     JSONObject recommend(int page, boolean comics) throws Exception { return category(comics ? "comic" : "short", page); }
     JSONObject search(String keyword) throws Exception {
-        JSONArray items = new JSONArray();
-        for (ContentType type : new ContentType[]{ContentType.SHORT, ContentType.COMIC}) {
-            for (Series item : upstream.search(keyword, 1, type).getItems())
-                items.put(card(item, type == ContentType.COMIC ? "comic" : "short"));
-        }
-        return new JSONObject().put("items", items).put("nextPage", JSONObject.NULL);
+        return search.search(keyword);
     }
     JSONObject detail(String id) throws Exception {
         Detail detail = upstream.detail(id);

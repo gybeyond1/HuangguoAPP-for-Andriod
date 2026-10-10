@@ -129,7 +129,10 @@ document.getElementById('confirm-accept').addEventListener('click', () => closeC
 confirmOverlay.addEventListener('click', event => { if (event.target === confirmOverlay) closeConfirmation(false); });
 
 function setAccount(profile) {
-  state.account = profile || { loggedIn: false };
+  const next = profile || { loggedIn: false };
+  if (JSON.stringify(state.account) === JSON.stringify(next)) return;
+  const savedScroll = scroll.scrollTop;
+  state.account = next;
   avatarImage.hidden = !profile?.avatar;
   avatarButton.querySelector('.account-avatar-default').hidden = Boolean(profile?.avatar);
   if (profile?.avatar) avatarImage.src = profile.avatar;
@@ -138,7 +141,8 @@ function setAccount(profile) {
   avatarButton.setAttribute('aria-label', profile?.loggedIn ? `打开${profile.username}的账号管理` : '登录账号');
   if (state.route === 'library') renderLibrary();
   if (state.route === 'settings') renderSettings();
-  if (state.route === 'account-management') renderAccountManagement();
+  if (state.route === 'account-management' && !content.querySelector('#password-form')?.contains(document.activeElement)) renderAccountManagement();
+  scroll.scrollTop = savedScroll;
 }
 api('account').then(setAccount).catch(() => {});
 window.hgWindowInsets = height => {
