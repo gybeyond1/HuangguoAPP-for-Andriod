@@ -86,3 +86,6 @@ button,a,input,[role=tab]{-webkit-tap-highlight-color:transparent}button{transit
 
 /* Homepage shelves show two rows while retaining horizontal browsing. */
 .home-page .film-row{display:grid;grid-template-rows:repeat(2,auto);grid-auto-flow:column;grid-auto-columns:106px;column-gap:10px;row-gap:18px;align-items:start}
+
+/* Local continue-watching shortcut, shared layout with isolated source histories. */
+.continue-section{margin:18px 0 29px}.continue-card{display:flex;align-items:center;gap:12px;width:calc(100% - 36px);margin:0 18px;padding:12px;border:0;border-radius:14px;background:var(--dock);color:var(--text);text-align:left}.continue-poster{width:58px;height:78px;flex:none;border-radius:8px}.continue-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:6px}.continue-copy strong{font-size:15px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.continue-copy>span{font-size:11px;color:var(--muted);line-height:1.4}.continue-copy .continue-time{font-size:10px}.continue-action{display:flex;align-items:center;justify-content:center;gap:4px;min-height:38px;flex:none;padding:0 10px;background:var(--accent);color:#222019;border-radius:19px;font-size:12px;font-weight:700}.continue-action svg{width:15px;height:15px;fill:currentColor;stroke:none}

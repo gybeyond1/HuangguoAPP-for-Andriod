@@ -124,6 +124,7 @@ final class AppStore {
         JSONObject item = new JSONObject();
         item.put("id", id);
         item.put("episode", episode);
+        item.put("episodeCount", input.optInt("episodeCount"));
         item.put("title", input.optString("title"));
         item.put("cover", input.optString("cover"));
         item.put("position", Math.max(0, Math.min(position, duration)));

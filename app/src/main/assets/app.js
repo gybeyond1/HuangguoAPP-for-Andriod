@@ -132,7 +132,9 @@ function setAccount(profile) {
   const next = profile || { loggedIn: false };
   if (JSON.stringify(state.account) === JSON.stringify(next)) return;
   const savedScroll = scroll.scrollTop;
+  const userChanged = state.account.userId !== next.userId;
   state.account = next;
+  if (userChanged) { state.library = null; if (state.route === 'home') { updateContinueWatching(); refreshHomeHistory(); } }
   avatarImage.hidden = !profile?.avatar;
   avatarButton.querySelector('.account-avatar-default').hidden = Boolean(profile?.avatar);
   if (profile?.avatar) avatarImage.src = profile.avatar;
@@ -216,7 +218,13 @@ window.hgAccountRefreshed = profile => {
 };
 window.hgAvatarUpdated = profile => { setAccount(profile); toast('头像已更新'); };
 window.hgAvatarError = message => toast(message || '头像保存失败', true);
-window.hgCloudSynced = () => { if (state.route === 'library') api('library').then(data => { state.library = data; renderLibrary(); }).catch(() => {}); };
+window.hgCloudSynced = () => {
+  if (state.route === 'home') refreshHomeHistory();
+  else if (state.route === 'library') {
+    const token = routeToken;
+    api('library').then(data => { if (token !== routeToken) return; state.library = data; renderLibrary(); }).catch(() => {});
+  }
+};
 
 function setAvailableUpdate(result) {
   updateAvailable = result?.status === 'available' ? result : null;
@@ -566,6 +574,55 @@ async function changeBanner(targetIndex, direction, automatic = false) {
   }
   finally { bannerChanging = false; scheduleBannerAuto(); }
 }
+function continueWatchingItem() {
+  return asArray(state.library?.progress)[0] || null;
+}
+function continueWatchingMarkup() {
+  const item = continueWatchingItem();
+  if (!item) return '';
+  const episode = Math.max(1, Number(item.episode) || 1);
+  const total = Number(item.episodeCount) || 0;
+  const finished = Boolean(item.completed) && total > 0 && episode >= total;
+  const seconds = Math.floor(Math.max(0, Number(item.position) || 0) / 1000);
+  const time = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+  return `<section class="continue-section"><div class="section-heading"><h2>继续观看</h2><button type="button" class="more" data-all-history="1">全部历史 ${icon('arrow')}</button></div>
+    <button type="button" class="continue-card" data-continue-id="${esc(item.id)}" aria-label="${esc(item.title)}，${finished ? '打开详情' : '继续观看'}">
+      <span class="continue-poster poster loading"><span class="poster-letter">${esc(String(item.title || '影片').slice(0, 1))}</span><img data-cover="${esc(item.cover || '')}" alt=""></span>
+      <span class="continue-copy"><strong>${esc(item.title || '影片')}</strong><span>已看到第 ${episode} 集${total ? ` · 共 ${total} 集` : ''}</span><span class="continue-time">${finished ? '全剧已看完' : item.completed ? '本集已看完，接着看下一集' : `上次看到 ${time}`}</span></span>
+      <span class="continue-action">${icon('play')}${finished ? '详情' : item.completed ? '继续看' : '续播'}</span>
+    </button></section>`;
+}
+function updateContinueWatching() {
+  const host = content.querySelector('.home-continue');
+  if (!host) return;
+  const markup = continueWatchingMarkup();
+  if (host.continueMarkup === markup) return;
+  const savedScroll = scroll.scrollTop;
+  host.innerHTML = markup;
+  host.continueMarkup = markup;
+  host.querySelectorAll('img[data-cover]').forEach(loadCoverInto);
+  scroll.scrollTop = savedScroll;
+}
+async function refreshHomeHistory() {
+  const token = routeToken, source = contentSource, userId = state.account.userId;
+  try {
+    const library = await api('library');
+    if (token !== routeToken || source !== contentSource || userId !== state.account.userId) return;
+    state.library = library;
+    if (state.route === 'home') updateContinueWatching();
+  } catch (_) { }
+}
+async function resumeFromHome(id) {
+  const item = continueWatchingItem();
+  if (!item || String(item.id) !== id) return;
+  const source = contentSource;
+  const episode = Math.max(1, Number(item.episode) || 1) + (item.completed ? 1 : 0);
+  const token = routeToken + 1;
+  await goDetail(id);
+  if (routeToken !== token || contentSource !== source || state.route !== 'detail' || state.detailLoading || String(state.detail?.id) !== id) return;
+  if (episode <= asArray(state.detail.episodes).length) await openPlayer(episode);
+}
+
 function renderHome() {
   const data = state.home;
   if (!data) { renderSkeleton(); return; }
@@ -575,6 +632,7 @@ function renderHome() {
   content.innerHTML = `<div class="home-page"><div class="hero" data-hero="1">${heroSlide(selected, index, slides.length)}</div>
       <div class="hero-dots">${slides.map((_, i) => `<i class="${i === index ? 'active' : ''}" data-slide="${i}"></i>`).join('')}</div>
       ${homeTagBar()}
+      <div class="home-continue">${continueWatchingMarkup()}</div>
       ${section('精选推荐', asArray(data.homepageRecommend).length ? asArray(data.homepageRecommend) : asArray(data.recommend?.items).slice(0, 12), 'recommend')}
       ${section(privateMode() ? '最近上新' : '热门漫剧', asArray(data.homepageNewest).length ? asArray(data.homepageNewest) : asArray(data.newest?.items).slice(0, 12), 'newest')}</div>`;
   hydrateImages();
@@ -864,6 +922,7 @@ function restoreScreen(snapshot) {
   state.listingReturn = snapshot.listingReturn;
   state.tagsReturn = snapshot.tagsReturn;
   content.replaceChildren(snapshot.pageNode);
+  if (snapshot.route === 'home') refreshHomeHistory();
   if (snapshot.route === 'library') renderLibrary();
   if (snapshot.route === 'settings') renderSettings();
   searchInput.value = snapshot.searchValue || '';
@@ -1040,8 +1099,9 @@ async function goHome() {
   stopBannerAuto();
   setRoute('home'); state.tab = 'home'; setNav('home');
   const refreshing = api('home');
-  const cached = await api('cached', { key: 'home' }).catch(() => null);
+  const [cached, library] = await Promise.all([api('cached', { key: 'home' }).catch(() => null), api('library').catch(() => null)]);
   if (token !== routeToken) return;
+  state.library = library;
   state.home = cached?.data || null;
   if (state.home) renderHome(); else renderSkeleton();
   try {
@@ -1337,6 +1397,7 @@ function returnFromDetail() {
   if (previous.route === 'category') compact.innerHTML = compactMarkup();
   updateCompact();
   hydrateImages();
+  if (previous.route === 'home') refreshHomeHistory();
   if (previous.route === 'category') observeCategoryEnd();
   if (previous.route === 'listing') observeListingEnd();
   if (isBannerRoute()) { restoreBannerIndex(); scheduleBannerAuto(); }
@@ -1364,6 +1425,7 @@ window.hgResume = () => {
   window.hgThemeRefresh?.();
   retryFailedImages(true);
   if (state.route === 'library') goLibrary(state.libraryTab);
+  if (state.route === 'home') refreshHomeHistory();
   if (state.route === 'detail' && state.detail) api('bookmark-state', { id: state.detail.id }).then(value => { state.bookmarked = value; renderDetail(); });
 };
 
@@ -1544,6 +1606,9 @@ document.addEventListener('click', async event => {
   if (nav) { tapDock(nav); return; }
   const libraryTab = event.target.closest('[data-library-tab]');
   if (libraryTab) { state.libraryTab = libraryTab.dataset.libraryTab; renderLibrary(); scroll.scrollTop = 0; return; }
+  if (event.target.closest('[data-all-history]')) { state.libraryQuery = ''; goLibrary('history'); return; }
+  const continueCard = event.target.closest('[data-continue-id]');
+  if (continueCard) { resumeFromHome(continueCard.dataset.continueId).catch(error => toast(error.message || '续播失败，请重试', true)); return; }
   const historyCard = event.target.closest('[data-history-id]');
   if (historyCard) {
     const id = historyCard.dataset.historyId;

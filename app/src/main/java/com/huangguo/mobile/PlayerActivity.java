@@ -1528,6 +1528,7 @@ public final class PlayerActivity extends Activity {
             JSONObject value = new JSONObject();
             value.put("id", currentId);
             value.put("episode", currentEpisode);
+            value.put("episodeCount", episodes == null ? 0 : episodes.length());
             value.put("title", currentItem.optString("title"));
             value.put("cover", currentItem.optString("cover"));
             value.put("position", player.getCurrentPosition());
