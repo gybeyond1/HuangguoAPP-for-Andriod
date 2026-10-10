@@ -1,4 +1,4 @@
-# 橙子短剧 Android 0.3.1
+# 橙子短剧 Android 0.3.2
 
 基于原黄果 Android 0.3.0 合入经过手机测试的红果双模式版。包名 com.huangguo.mobile 与原黄果一致，正式签名沿用原证书，可覆盖升级；桌面应用名称改为橙子短剧，图标使用用户提供的橙子播放图。
 
@@ -19,3 +19,7 @@ HTML/CSS/JS 与主题支持热更新；Java/Kotlin 原生播放和红果接口�
 ## 构建与许可
 
 需要 Android SDK 37、JDK、Android Studio Kotlin 编译器；scripts/build-hongguo-core.py 构建 Kotlin 核心。来源固定于 N3urda/hongguoTV 提交 eea73e6a45569a2cbbb9440f7cd5290c459b0b70。Android 派生应用按 GPL-3.0-only 提供，见 LICENSE 与 third_party/hongguo/NOTICE.md。
+
+## 0.3.2 桌面图标白底
+
+自适应桌面图标背景改为纯白 #FFFFFF，橙子前景保持原样。沿用原正式签名，versionCode=37。此项为 APK 原生资源更新，热更新资源 r5 不变。
