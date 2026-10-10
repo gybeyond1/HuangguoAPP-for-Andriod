@@ -83,3 +83,6 @@ button,a,input,[role=tab]{-webkit-tap-highlight-color:transparent}button{transit
 #app[data-route=settings]>#scroll{height:100%}
 #app[data-route=settings] .settings-page{padding-top:calc(19px + var(--status-bar-height))}
 #app[data-route=settings]>.back-preview{inset:0}
+
+/* Homepage shelves show two rows while retaining horizontal browsing. */
+.home-page .film-row{display:grid;grid-template-rows:repeat(2,auto);grid-auto-flow:column;grid-auto-columns:106px;column-gap:10px;row-gap:18px;align-items:start}
