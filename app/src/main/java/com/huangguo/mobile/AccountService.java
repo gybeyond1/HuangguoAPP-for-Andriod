@@ -140,10 +140,12 @@ final class AccountService {
         if (user == null) return new JSONObject().put("loggedIn", false);
         store.activateUser(user.getObjectId());
         JSONObject local = store.cloudSnapshot();
+        String libraryClass = ContentMode.PRIVATE.equals(store.source) ? "UserLibrary" : "DualUserLibrary";
         ParseObject record = null;
         try {
-            ParseQuery<ParseObject> query = ParseQuery.getQuery("UserLibrary");
+            ParseQuery<ParseObject> query = ParseQuery.getQuery(libraryClass);
             query.whereEqualTo("owner", user);
+            if (ContentMode.PUBLIC.equals(store.source)) query.whereEqualTo("source", store.source);
             query.orderByDescending("updatedAt");
             query.setLimit(1);
             List<ParseObject> rows = query.find();
@@ -156,8 +158,9 @@ final class AccountService {
         JSONObject merged = merge(local, remote);
         store.applyCloudSnapshot(merged);
         if (record == null || !merged.toString().equals(remote.toString())) {
-            if (record == null) record = new ParseObject("UserLibrary");
+            if (record == null) record = new ParseObject(libraryClass);
             record.put("owner", user);
+            record.put("source", store.source);
             record.put("payload", merged.toString());
             record.setACL(new ParseACL(user));
             record.save();

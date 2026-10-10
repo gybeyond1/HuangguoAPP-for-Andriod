@@ -16,9 +16,14 @@ import java.util.Set;
 final class AppStore {
     private static final int HISTORY_LIMIT = 50;
     private final SharedPreferences preferences;
+    final String source;
 
     AppStore(Context context) {
-        preferences = context.getSharedPreferences("huangguo-data", Context.MODE_PRIVATE);
+        this(context, ContentMode.get(context).active());
+    }
+    AppStore(Context context, String source) {
+        this.source = source;
+        preferences = context.getSharedPreferences(ContentMode.PRIVATE.equals(source) ? "huangguo-data" : "dual-data-hongguo", Context.MODE_PRIVATE);
     }
 
     private String scoped(String name) {

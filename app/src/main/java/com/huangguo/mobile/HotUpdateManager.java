@@ -150,6 +150,7 @@ final class HotUpdateManager {
     boolean hasPending() { synchronized (this) { return state().optLong("pending") > 0; } }
 
     JSONObject check(boolean force) throws Exception {
+        if (INDEX.isEmpty()) return status().put("enabled", false);
         if (!checking.compareAndSet(false, true)) return status();
         try {
             long now = System.currentTimeMillis();
@@ -187,7 +188,7 @@ final class HotUpdateManager {
     }
     private void requireCompatible(JSONObject meta) throws Exception {
         int code = context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionCode;
-        if (meta.getInt("minVersionCode") > code || meta.getInt("bridgeVersion") != BRIDGE_VERSION
+        if (meta.optInt("contentModeVersion") != 1 || meta.getInt("minVersionCode") > code || meta.getInt("bridgeVersion") != BRIDGE_VERSION
                 || meta.optInt("maxVersionCode", Integer.MAX_VALUE) < code)
             throw new IllegalArgumentException("资源包需要更新应用版本");
     }

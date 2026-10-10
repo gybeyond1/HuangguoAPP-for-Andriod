@@ -5,10 +5,11 @@
     <application
         android:name=".HuangGuoApp"
         android:allowBackup="false"
-        android:icon="@drawable/app_icon_white"
-        android:roundIcon="@drawable/app_icon_white"
-        android:label="黄果短剧"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="橙子短剧"
         android:theme="@style/AppTheme"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:usesCleartextTraffic="false">
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -10,8 +10,8 @@ android {
         applicationId 'com.huangguo.mobile'
         minSdk 26
         targetSdk 36
-        versionCode 35
-        versionName '0.3.0'
+        versionCode 36
+        versionName '0.3.1'
         testInstrumentationRunner 'com.huangguo.mobile.PlaybackTestRunner'
     }
 
@@ -27,7 +27,32 @@ android {
     }
 }
 
+configurations { hongguoCompile }
+def hongguoJar = layout.buildDirectory.file('libs/hongguo-core.jar')
+def compileHongguo = tasks.register('compileHongguoCore', Exec) {
+    inputs.files(fileTree('../third_party/hongguo/src') { include '**/*.kt' })
+    inputs.file('../scripts/build-hongguo-core.py')
+    outputs.file(hongguoJar)
+    doFirst {
+        def sdkPath = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT') ?: "${System.getenv('LOCALAPPDATA')}/Android/Sdk"
+        def platform = file("${sdkPath}/platforms/android-37.0/android.jar")
+        if (!platform.exists()) platform = file("${sdkPath}/platforms/android-37/android.jar")
+        commandLine 'python', '-X', 'utf8', file('../scripts/build-hongguo-core.py'),
+                '--classpath', (configurations.hongguoCompile.files + [platform]).collect { it.absolutePath }.join(File.pathSeparator),
+                '--output', hongguoJar.get().asFile.absolutePath
+    }
+}
+
 dependencies {
+    hongguoCompile('com.squareup.okhttp3:okhttp:4.10.0') { transitive = false }
+    hongguoCompile('com.squareup.okio:okio-jvm:3.0.0') { transitive = false }
+    hongguoCompile('org.bouncycastle:bcprov-jdk18on:1.80.2') { transitive = false }
+    hongguoCompile('org.jsoup:jsoup:1.23.2') { transitive = false }
+    hongguoCompile('org.jetbrains.kotlin:kotlin-stdlib:2.2.10') { transitive = false }
+    implementation files(hongguoJar).builtBy(compileHongguo)
+    implementation 'com.squareup.okhttp3:okhttp:4.10.0'
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.80.2'
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.2.10'
     implementation 'androidx.webkit:webkit:1.17.1'
     androidTestImplementation 'androidx.test:runner:1.7.0'
     androidTestImplementation 'junit:junit:4.13.2'

@@ -2,17 +2,22 @@
 
 const callbacks = new Map();
 let requestNumber = 0;
+let contentSource = 'hongguo';
+let contentReady;
+const bridgeInstance = Date.now() + '-' + Math.random().toString(36).slice(2);
+const privateMode = () => contentSource === 'huangguo';
 window.NativeCallbacks = {
   resolve(id, value) { callbacks.get(id)?.resolve(value); callbacks.delete(id); },
   reject(id, message) { callbacks.get(id)?.reject(new Error(message)); callbacks.delete(id); }
 };
 function api(action, args = {}) {
-  return new Promise((resolve, reject) => {
-    const id = (window.HotRuntime?.bootId || 'legacy') + ':' + (++requestNumber);
+  const request = () => new Promise((resolve, reject) => {
+    const id = bridgeInstance + ':' + (++requestNumber);
     callbacks.set(id, { resolve, reject });
-    try { AndroidHost.request(id, action, JSON.stringify(args)); }
+    try { AndroidHost.request(id, action, JSON.stringify({ ...args, source: contentSource })); }
     catch (error) { callbacks.delete(id); reject(error); }
   });
+  return contentReady ? contentReady.then(request) : request();
 }
 
 const scroll = document.getElementById('scroll');
@@ -28,6 +33,7 @@ const updateLaterButton = document.getElementById('update-later');
 const searchInput = document.getElementById('search-input');
 const headerSettings = document.getElementById('header-settings');
 const confirmOverlay = document.getElementById('confirm-overlay');
+const unlockOverlay = document.getElementById('unlock-overlay');
 const categoryIds = { adult: ['ai-duanju', 'ai-manju'], ai: ['ai-huanlian', 'ai-mogai'] };
 const popularTags = [
   ['dushi', '都市'], ['xiaoyuan', '校园'], ['gufeng', '古风'], ['haomen', '豪门'],
@@ -40,11 +46,24 @@ const tagGroups = [
 const state = {
   route: 'home', tab: 'home', sub: { adult: 0, ai: 0 }, home: null,
   category: null, categoryItems: [], detail: null, detailLoading: false, sourceItem: null,
-  search: null, query: '', filter: 'all', banner: 0,
+  search: null, query: '', filter: 'all', banner: 0, categoryBanner: 0,
   listing: null, tags: null, tagsReturn: null, listingReturn: null, settingsReturn: null,
   libraryTab: 'history', libraryQuery: '', accountReturn: null, account: { loggedIn: false },
   sourceGroup: '', sourceQueue: [], previous: null, compactHeld: false
 };
+contentReady = api('content-status').then(status => {
+  contentSource = status.source || 'hongguo';
+  document.title = '橙子短剧';
+  if (!privateMode()) {
+    categoryIds.adult = ['short']; categoryIds.ai = ['comic'];
+    document.querySelector('[data-nav="adult"] > span:last-child').textContent = '短剧';
+    document.querySelector('[data-nav="ai"] > span:last-child').textContent = '漫剧';
+    searchInput.placeholder = '搜索剧名';
+    searchInput.setAttribute('aria-label', '搜索剧名');
+  }
+  return status;
+});
+
 let routeToken = 0;
 let toastTimer;
 let observer;
@@ -88,6 +107,7 @@ let finishConfirmation;
 function closeConfirmation(accepted) {
   if (confirmOverlay.hidden) return;
   confirmOverlay.hidden = true;
+  updateBackEnabled();
   finishConfirmation?.(accepted);
   finishConfirmation = null;
 }
@@ -96,6 +116,7 @@ function askConfirmation(title, message, action = '清空') {
   document.getElementById('confirm-message').textContent = message;
   document.getElementById('confirm-accept').textContent = action;
   confirmOverlay.hidden = false;
+  updateBackEnabled();
   document.getElementById('confirm-cancel').focus();
   return new Promise(resolve => { finishConfirmation = resolve; });
 }
@@ -142,7 +163,8 @@ function showAuth(mode = 'login') {
   if (authPending) mode = authMode;
   authMode = mode;
   authOverlay.hidden = false;
-  document.getElementById('auth-title').textContent = mode === 'login' ? '登录黄果账号' : '注册黄果账号';
+  updateBackEnabled();
+  document.getElementById('auth-title').textContent = mode === 'login' ? '登录应用账号' : '注册应用账号';
   setAuthPending(authPending, mode);
   document.getElementById('auth-password').autocomplete = mode === 'login' ? 'current-password' : 'new-password';
   document.querySelectorAll('[data-auth-mode]').forEach(button => button.classList.toggle('selected', button.dataset.authMode === mode));
@@ -150,6 +172,7 @@ function showAuth(mode = 'login') {
 }
 function hideAuth() {
   authOverlay.hidden = true;
+  updateBackEnabled();
   document.getElementById('auth-form').reset();
 }
 avatarButton.addEventListener('click', () => {
@@ -190,7 +213,7 @@ window.hgCloudSynced = () => { if (state.route === 'library') api('library').the
 function setAvailableUpdate(result) {
   updateAvailable = result?.status === 'available' ? result : null;
   headerSettings.classList.toggle('has-update', Boolean(updateAvailable));
-  const versionButton = content.querySelector('[data-open-update]');
+  const versionButton = content.querySelector('[data-secret-entry]');
   if (versionButton) {
     versionButton.classList.toggle('has-update', Boolean(updateAvailable));
     versionButton.setAttribute('aria-label', updateAvailable ? `当前版本 ${appVersion}，发现新版 ${updateAvailable.version}，查看更新` : `当前版本 ${appVersion}，检查更新`);
@@ -206,6 +229,7 @@ function showUpdate(result) {
   updateDownloadButton.textContent = '下载并安装';
   updateDownloadButton.disabled = false;
   updateOverlay.hidden = false;
+  updateBackEnabled();
 }
 
 async function checkUpdate(manual) {
@@ -222,6 +246,7 @@ async function checkUpdate(manual) {
       if (manual && result.status === 'current') toast(`已是最新版本 ${result.version}`);
       if (manual && result.status === 'unpublished') toast('暂未发布更新包', true);
     }
+    else if (manual && result.status === 'unconfigured') toast('暂未发布更新包', true);
     else if (manual && result.status === 'throttled') toast('一小时内最多手动检查 5 次，请稍后再试', true);
   } catch (error) {
     if (manual) toast(error.message || '检查更新失败，请稍后重试', true);
@@ -255,7 +280,7 @@ updateDownloadButton.addEventListener('click', async () => {
     updateLaterButton.disabled = false;
   }
 });
-updateLaterButton.addEventListener('click', () => { if (!updateDownloading) updateOverlay.hidden = true; });
+updateLaterButton.addEventListener('click', () => { if (!updateDownloading) { updateOverlay.hidden = true; updateBackEnabled(); } });
 
 window.hgTheme = dark => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; };
 api('theme').then(window.hgTheme).catch(() => {});
@@ -274,6 +299,7 @@ function section(title, items, kind = '') {
   return `<section class="film-section"><div class="section-heading"><h2>${esc(title)}</h2>${kind ? `<button class="more" data-more="${kind}" type="button">更多 ${icon('arrow')}</button>` : ''}</div><div class="film-row">${items.map(itemCard).join('')}</div></section>`;
 }
 function homeTagBar() {
+  if (!privateMode()) return `<nav class="home-tags" aria-label="按类型浏览"><div class="home-tag-scroll"><button type="button" class="home-tag" data-public-category="adult">短剧</button><button type="button" class="home-tag" data-public-category="ai">漫剧</button></div></nav>`;
   return `<nav class="home-tags" aria-label="按类型浏览"><button type="button" class="all-tags-link" data-all-tags="1">全部类型 ${icon('arrow')}</button>
     <div class="home-tag-scroll">${popularTags.map(([slug, name]) => `<button type="button" class="home-tag" data-tag-slug="${slug}" data-tag-name="${name}">${name}</button>`).join('')}</div></nav>`;
 }
@@ -452,18 +478,29 @@ function goCampaign(item) {
     + '<section class="campaign-message"><h2>共庆好时光</h2><p>' + esc(item.message || '') + '</p><button type="button" data-back>返回首页</button></section></article>';
   scroll.scrollTop = 0;
 }
+function isBannerRoute() { return state.route === 'home' || (state.route === 'category' && !privateMode()); }
+function bannerSlides() { return state.route === 'category' ? asArray(state.category?.items).slice(0, 5) : homeSlides(); }
+function bannerIndex() { return state.route === 'category' ? state.categoryBanner : state.banner; }
+function restoreBannerIndex() {
+  const index = Number(content.querySelector('.hero-slide:last-child')?.dataset.index || 0);
+  if (state.route === 'category') state.categoryBanner = index;
+  else if (state.route === 'home') state.banner = index;
+}
+function categorySlide(item, index, count) {
+  return `<div class="hero-slide" data-index="${index}"><img class="hero-image" data-cover="${esc(item.cover || '')}" alt=""><button class="hero-cover-button" type="button" data-open-id="${esc(item.id)}" aria-label="查看${esc(item.title)}详情"></button><div class="hero-shade"></div><div class="category-spotlight-copy"><h2>${esc(item.title)}</h2><button type="button" data-open-id="${esc(item.id)}">查看作品 ${icon('arrow')}</button></div><div class="hero-index"><b>${String(index + 1).padStart(2, '0')}</b> / ${String(count).padStart(2, '0')}</div></div>`;
+}
 function stopBannerAuto() {
   clearTimeout(bannerTimer);
   bannerTimer = null;
 }
 function scheduleBannerAuto() {
   stopBannerAuto();
-  if (state.route !== 'home' || document.hidden || homeSlides().length < 2 || !content.querySelector('.hero')) return;
+  if (!isBannerRoute() || document.hidden || bannerSlides().length < 2 || !content.querySelector('.hero')) return;
   bannerTimer = setTimeout(() => {
     bannerTimer = null;
-    if (state.route !== 'home' || document.hidden) return;
-    const count = homeSlides().length;
-    if (count > 1) changeBanner((state.banner + 1) % count, 1, true);
+    if (!isBannerRoute() || document.hidden) return;
+    const count = bannerSlides().length;
+    if (count > 1) changeBanner((bannerIndex() + 1) % count, 1, true);
   }, 3000);
 }
 document.addEventListener('visibilitychange', () => {
@@ -477,9 +514,11 @@ function heroSlide(item, index, count) {
     <div class="hero-index"><b>${String(index + 1).padStart(2, '0')}</b> / ${String(count).padStart(2, '0')}</div></div>`;
 }
 async function changeBanner(targetIndex, direction, automatic = false) {
-  const slides = homeSlides();
+  const slides = bannerSlides();
+  const route = state.route, token = routeToken;
+  const currentRoute = () => state.route === route && routeToken === token && !document.hidden;
   const hero = content.querySelector('.hero');
-  if (!hero || !slides.length || bannerChanging || targetIndex === state.banner) return;
+  if (!isBannerRoute() || !hero || !slides.length || bannerChanging || targetIndex === bannerIndex()) return;
   stopBannerAuto();
   bannerChanging = true;
   let incoming = null;
@@ -487,16 +526,16 @@ async function changeBanner(targetIndex, direction, automatic = false) {
     const item = slides[targetIndex];
     const data = item.kind === 'campaign' ? campaignArtwork(item) : await getCover(item.cover);
     const template = document.createElement('template');
-    template.innerHTML = heroSlide(item, targetIndex, slides.length);
+    template.innerHTML = route === 'category' ? categorySlide(item, targetIndex, slides.length) : heroSlide(item, targetIndex, slides.length);
     incoming = template.content.firstElementChild;
     const image = incoming.querySelector('img');
     image.src = data;
-    if (!hero.isConnected || state.route !== 'home' || document.hidden) return;
+    if (!hero.isConnected || !currentRoute()) return;
     incoming.style.transform = `translateX(${direction > 0 ? 100 : -100}%)`;
     hero.appendChild(incoming);
     await image.decode();
-    if (!hero.isConnected || state.route !== 'home' || document.hidden) { incoming.remove(); return; }
-    if (item.kind !== 'campaign') applyBannerPalette(image);
+    if (!hero.isConnected || !currentRoute()) { incoming.remove(); return; }
+    if (route === 'home' && item.kind !== 'campaign') applyBannerPalette(image);
     const current = hero.querySelector('.hero-slide:not(:last-child)');
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     incoming.classList.add('animating');
@@ -507,7 +546,10 @@ async function changeBanner(targetIndex, direction, automatic = false) {
     current.remove();
     incoming.classList.remove('animating');
     incoming.style.transform = '';
-    state.banner = targetIndex;
+    if (currentRoute()) {
+      if (route === 'category') state.categoryBanner = targetIndex;
+      else state.banner = targetIndex;
+    }
     content.querySelectorAll('.hero-dots [data-slide]').forEach(dot => dot.classList.toggle('active', Number(dot.dataset.slide) === targetIndex));
   } catch (error) {
     incoming?.remove();
@@ -526,7 +568,7 @@ function renderHome() {
       <div class="hero-dots">${slides.map((_, i) => `<i class="${i === index ? 'active' : ''}" data-slide="${i}"></i>`).join('')}</div>
       ${homeTagBar()}
       ${section('精选推荐', asArray(data.homepageRecommend).length ? asArray(data.homepageRecommend) : asArray(data.recommend?.items).slice(0, 12), 'recommend')}
-      ${section('最近上新', asArray(data.homepageNewest).length ? asArray(data.homepageNewest) : asArray(data.newest?.items).slice(0, 12), 'newest')}</div>`;
+      ${section(privateMode() ? '最近上新' : '热门漫剧', asArray(data.homepageNewest).length ? asArray(data.homepageNewest) : asArray(data.newest?.items).slice(0, 12), 'newest')}</div>`;
   hydrateImages();
   slides.forEach(item => { if (item.cover) getCover(item.cover).catch(() => {}); });
   scheduleBannerAuto();
@@ -561,12 +603,13 @@ function refreshMissingImages(items) {
 
 function categoryId() { return categoryIds[state.tab][state.sub[state.tab]]; }
 function compactMarkup() {
+  if (!privateMode()) return '';
   const adult = state.tab === 'adult';
-  const tabs = adult ? ['成人短剧', '成人漫剧'] : ['AI换脸', 'AI魔改'];
-  return `<strong>${adult ? '成人剧场' : 'AI专区'}</strong><div class="compact-tabs" role="tablist">${tabs.map((name, index) => `<button type="button" role="tab" aria-selected="${index === state.sub[state.tab]}" data-sub="${index}" class="${index === state.sub[state.tab] ? 'selected' : ''}">${name}</button>`).join('')}</div>`;
+  const tabs = privateMode() ? (adult ? ['成人短剧', '成人漫剧'] : ['AI换脸', 'AI魔改']) : [adult ? '短剧' : '漫剧'];
+  return `<strong>${privateMode() ? (adult ? '成人剧场' : 'AI专区') : (adult ? '短剧' : '漫剧')}</strong><div class="compact-tabs" role="tablist">${tabs.map((name, index) => `<button type="button" role="tab" aria-selected="${index === state.sub[state.tab]}" data-sub="${index}" class="${index === state.sub[state.tab] ? 'selected' : ''}">${name}</button>`).join('')}</div>`;
 }
 function updateCompact() {
-  const eligible = state.route === 'category';
+  const eligible = privateMode() && state.route === 'category';
   if (!eligible || scroll.scrollTop <= 0) state.compactHeld = false;
   else if (scroll.scrollTop > 92) state.compactHeld = true;
   const visible = eligible && state.compactHeld;
@@ -580,12 +623,17 @@ scroll.addEventListener('scroll', updateCompact, { passive: true });
 function renderCategory(keepCompact = false) {
   categoryObserver?.disconnect();
   const adult = state.tab === 'adult';
-  const tabs = adult ? ['成人短剧', '成人漫剧'] : ['AI换脸', 'AI魔改'];
+  const tabs = privateMode() ? (adult ? ['成人短剧', '成人漫剧'] : ['AI换脸', 'AI魔改']) : [adult ? '短剧' : '漫剧'];
   const items = asArray(state.category?.items);
   const lead = items[0] || null;
-  content.innerHTML = `<div class="category-page"><div class="category-head"><h1>${adult ? '成人剧场' : 'AI专区'}</h1><p>${adult ? '短剧与漫剧，走进不同的人生。' : '换脸与魔改，探索影像新可能。'}</p></div>
-    <div class="segmented" role="tablist">${tabs.map((name, index) => `<button type="button" role="tab" data-sub="${index}" aria-selected="${index === state.sub[state.tab]}" class="${index === state.sub[state.tab] ? 'selected' : ''}">${name}</button>`).join('')}</div>
-    ${lead ? `<div class="category-spotlight"><img data-cover="${esc(lead.cover)}" alt=""><div class="category-spotlight-copy"><h2>${esc(lead.title)}</h2><button type="button" data-open-id="${esc(lead.id)}">查看作品 ${icon('arrow')}</button></div></div>` : ''}
+  const slides = privateMode() ? [] : items.slice(0, 5);
+  const banner = Math.min(state.categoryBanner, Math.max(0, slides.length - 1));
+  state.categoryBanner = banner;
+  const spotlight = !privateMode() && slides.length ? `<div class="hero category-spotlight category-carousel">${categorySlide(slides[banner], banner, slides.length)}</div><div class="hero-dots">${slides.map((_, index) => `<i class="${index === banner ? 'active' : ''}" data-slide="${index}"></i>`).join('')}</div>` : lead ? `<div class="category-spotlight"><img data-cover="${esc(lead.cover)}" alt=""><div class="category-spotlight-copy"><h2>${esc(lead.title)}</h2><button type="button" data-open-id="${esc(lead.id)}">查看作品 ${icon('arrow')}</button></div></div>` : '';
+  const switcher = privateMode() ? `<div class="segmented" role="tablist">${tabs.map((name, index) => `<button type="button" role="tab" data-sub="${index}" aria-selected="${index === state.sub[state.tab]}" class="${index === state.sub[state.tab] ? 'selected' : ''}">${name}</button>`).join('')}</div>` : '';
+  content.innerHTML = `<div class="category-page"><div class="category-head"><h1>${privateMode() ? (adult ? '成人剧场' : 'AI专区') : (adult ? '短剧' : '漫剧')}</h1><p>${privateMode() ? (adult ? '短剧与漫剧，走进不同的人生。' : '换脸与魔改，探索影像新可能。') : (adult ? '真人演的看了不烧心' : '探索热门漫剧。')}</p></div>
+    ${switcher}
+    ${spotlight}
     <section class="category-section"><div class="section-heading"><h2>${tabs[state.sub[state.tab]]}作品</h2><span class="category-count">已显示 ${items.length} 部</span></div>
     <div class="search-grid category-grid">${items.map(itemCard).join('')}</div><div class="category-footer">${categoryFooter()}</div></section></div>`;
   compact.innerHTML = compactMarkup();
@@ -594,6 +642,8 @@ function renderCategory(keepCompact = false) {
   updateCompact();
   hydrateImages();
   observeCategoryEnd();
+  slides.forEach(item => { if (item.cover) getCover(item.cover).catch(() => {}); });
+  scheduleBannerAuto();
 }
 
 function categoryFooter() {
@@ -661,15 +711,15 @@ function renderSettings() {
       <button type="button" data-clear="history" ${asArray(state.library?.progress).length ? '' : 'disabled'}>清空观看历史</button>
       <button type="button" data-clear="bookmarks" ${asArray(state.library?.bookmarks).length ? '' : 'disabled'}>清空我的收藏</button></section>
     <section class="update-settings"><div><h2>界面与站点资源</h2><p data-resource-status>后台自动检查，已下载的更新在合适时机启用。</p><button type="button" data-apply-resources hidden>启用已下载资源</button></div><button type="button" data-check-resources>检查资源</button></section>
-    <section class="update-settings"><div><h2>应用更新</h2><button type="button" class="app-version ${updateAvailable ? 'has-update' : ''}" data-open-update aria-label="${updateAvailable ? `当前版本 ${esc(appVersion)}，发现新版 ${esc(updateAvailable.version)}，查看更新` : `当前版本 ${esc(appVersion)}，检查更新`}"><span class="app-version-text">版本 ${appVersion ? `v${esc(appVersion)}` : '读取中…'}</span></button><p>启动后自动检查，也可以在这里手动检查。</p></div><button type="button" data-check-update>检查更新</button></section>
-    <section class="settings-storage"><h2>本地存储</h2><button type="button" data-clear="cache">清理内容缓存</button></section></div>`;
+    <section class="update-settings"><div><h2>应用更新</h2><button type="button" class="app-version ${updateAvailable ? 'has-update' : ''}" data-secret-entry aria-label="当前版本 ${esc(appVersion)}"><span class="app-version-text">版本 ${appVersion ? `v${esc(appVersion)}` : '读取中…'}</span></button><p>启动后自动检查，也可以在这里手动检查。</p></div><button type="button" data-check-update>检查更新</button></section>
+    ${privateMode() ? '<section class="settings-storage"><button type="button" data-return-public>返回红果</button></section>' : ''}<section class="settings-storage"><h2>本地存储</h2><button type="button" data-clear="cache">清理内容缓存</button></section></div>`;
   api('hot-update-status').then(window.hgHotUpdateStatus).catch(() => {});
 }
 
 function renderAccountManagement() {
   const account = state.account;
   content.innerHTML = `<div class="settings-page account-page"><button type="button" class="listing-back" data-back="1">${icon('back')} 返回设置</button><h1>账号管理</h1>
-    ${account.loggedIn ? `<section class="account-identity"><img src="${esc(account.avatar || 'user.svg')}" alt=""><div><strong>${esc(account.username)}</strong><span>已登录黄果账号</span></div></section>
+    ${account.loggedIn ? `<section class="account-identity"><img src="${esc(account.avatar || 'user.svg')}" alt=""><div><strong>${esc(account.username)}</strong><span>已登录应用账号</span></div></section>
       <section class="settings-account"><h2>个人资料</h2><button type="button" data-choose-avatar="1">从相册更换头像</button></section>
       <section class="settings-account"><h2>修改密码</h2><p>先验证旧密码，再设置至少 8 位的新密码。</p>
         <form id="password-form" class="password-form">
@@ -682,7 +732,7 @@ function renderAccountManagement() {
 }
 
 function renderSearch() {
-  const filters = [['all', '全部'], ['ai-duanju', '成人短剧'], ['ai-manju', '成人漫剧'], ['ai-huanlian', 'AI换脸'], ['ai-mogai', 'AI魔改']];
+  const filters = privateMode() ? [['all', '全部'], ['ai-duanju', '成人短剧'], ['ai-manju', '成人漫剧'], ['ai-huanlian', 'AI换脸'], ['ai-mogai', 'AI魔改']] : [['all', '全部'], ['short', '短剧'], ['comic', '漫剧']];
   const all = asArray(state.search?.items);
   const items = state.filter === 'all' ? all : all.filter(item => {
     if (item.category) return item.category === state.filter;
@@ -730,7 +780,7 @@ function updateListingFooter() {
 function renderListing() {
   const listing = state.listing;
   if (!listing?.items.length && listing?.refreshing) { renderSkeleton(); return; }
-  const title = listing.kind === 'tag-list' ? `#${String(listing.label || listing.slug).replace(/^#+/, '')}` : listing.kind === 'recommend' ? '精选推荐' : '最近上新';
+  const title = listing.kind === 'tag-list' ? `#${String(listing.label || listing.slug).replace(/^#+/, '')}` : listing.kind === 'recommend' ? '精选推荐' : privateMode() ? '最近上新' : '热门漫剧';
   const backLabel = listing.kind === 'tag-list' && state.listingReturn?.route === 'tags' ? '返回全部类型' : '返回首页';
   content.innerHTML = `<div class="listing-page"><button class="listing-back" type="button" data-back="1">${icon('back')} ${backLabel}</button>
     <h1>${esc(title)}</h1><p>已显示 ${listing.items.length} 部作品</p>
@@ -812,13 +862,18 @@ function restoreScreen(snapshot) {
     row.scrollLeft = snapshot.horizontalScroll?.[index] || 0;
   });
   hydrateImages();
-  if (snapshot.route === 'home') scheduleBannerAuto();
+  if (isBannerRoute()) { restoreBannerIndex(); scheduleBannerAuto(); }
   if (snapshot.route === 'category') { compact.innerHTML = compactMarkup(); updateCompact(); observeCategoryEnd(); }
   if (snapshot.route === 'listing') observeListingEnd();
 }
 
+function updateBackEnabled() {
+  const modalOpen = [unlockOverlay, authOverlay, confirmOverlay, updateOverlay].some(overlay => !overlay.hidden);
+  window.AndroidHost?.setBackEnabled(modalOpen || !isRootColumn());
+}
+
 function setRoute(route) {
-  if (route !== 'home') stopBannerAuto();
+  stopBannerAuto();
   if (state.route === 'detail' && route !== 'detail') { detailCard?.dispose(); detailCard = null; }
   const libraryArea = ['library', 'settings', 'account-management'].includes(route);
   if (state.route === 'library' && route !== 'library') searchInput.value = '';
@@ -829,13 +884,16 @@ function setRoute(route) {
   document.getElementById('app').classList.toggle('route-detail', route === 'detail');
   window.AndroidHost?.setDetailMode?.(route === 'detail');
   headerSettings.hidden = route !== 'library';
-  searchInput.placeholder = libraryArea ? '搜索观看历史和收藏' : '搜索剧名或 #标签';
+  searchInput.placeholder = libraryArea ? '搜索观看历史和收藏' : privateMode() ? '搜索剧名或 #标签' : '搜索剧名';
   searchInput.setAttribute('aria-label', libraryArea ? '搜索观看历史和收藏' : '搜索剧名或标签');
   if (route === 'library') searchInput.value = state.libraryQuery;
-  window.AndroidHost?.setBackEnabled(route !== 'home');
+  updateBackEnabled();
 }
 
+function isRootColumn() { return ['home', 'category', 'library'].includes(state.route); }
+
 function backDestination() {
+  if (isRootColumn()) return null;
   if (state.route === 'campaign') return state.campaignReturn?.route || 'home';
   if (state.route === 'detail') return state.previous?.route || 'home';
   if (state.route === 'account-management') return state.accountReturn?.route || 'settings';
@@ -860,7 +918,7 @@ function clearPredictivePreview() {
 
 window.hgPredictiveBackStart = fromRight => {
   clearPredictivePreview();
-  if (state.route === 'detail' && detailCard && authOverlay.hidden && confirmOverlay.hidden && updateOverlay.hidden) {
+  if (state.route === 'detail' && detailCard && authOverlay.hidden && confirmOverlay.hidden && updateOverlay.hidden && unlockOverlay.hidden) {
     detailCard.fromRight = fromRight;
     return detailCard.begin();
   }
@@ -871,7 +929,7 @@ window.hgPredictiveBackStart = fromRight => {
   const preview = document.createElement('div');
   preview.className = 'back-preview';
   preview.setAttribute('aria-hidden', 'true');
-  if (state.route === 'detail') {
+  if (state.route === 'detail' || state.route === 'settings') {
     const header = document.querySelector('#app > .app-top').cloneNode(true);
     const settings = header.querySelector('.header-settings');
     settings.hidden = destination !== 'library';
@@ -932,7 +990,7 @@ window.hgPredictiveBackCancel = () => {
 };
 
 window.hgPredictiveBackCommit = () => {
-  if (state.route === 'detail' && detailCard && authOverlay.hidden && confirmOverlay.hidden && updateOverlay.hidden) {
+  if (state.route === 'detail' && detailCard && authOverlay.hidden && confirmOverlay.hidden && updateOverlay.hidden && unlockOverlay.hidden) {
     detailCard.close(); return true;
   }
   if (!predictivePreview) return window.hgBack();
@@ -1124,7 +1182,7 @@ async function goCategory(tab, sub = state.sub[tab], keepCompact = false) {
   const token = ++routeToken;
   categoryObserver?.disconnect();
   if (state.route === 'home') rememberScreen();
-  setRoute('category'); state.tab = tab; state.sub[tab] = sub; state.category = null;
+  setRoute('category'); state.tab = tab; state.sub[tab] = sub; state.category = null; state.categoryBanner = 0;
   if (!keepCompact) setNav(tab);
   const id = categoryId();
   const refreshing = api('category', { id, page: 1 });
@@ -1268,13 +1326,15 @@ function returnFromDetail() {
   hydrateImages();
   if (previous.route === 'category') observeCategoryEnd();
   if (previous.route === 'listing') observeListingEnd();
-  if (previous.route === 'home') scheduleBannerAuto();
+  if (isBannerRoute()) { restoreBannerIndex(); scheduleBannerAuto(); }
 }
 
 window.hgBack = () => {
+  if (!unlockOverlay.hidden) { closeUnlock(); return true; }
   if (!authOverlay.hidden) { hideAuth(); return true; }
   if (!confirmOverlay.hidden) { closeConfirmation(false); return true; }
-  if (!updateOverlay.hidden) { if (!updateDownloading) updateOverlay.hidden = true; return true; }
+  if (!updateOverlay.hidden) { if (!updateDownloading) { updateOverlay.hidden = true; updateBackEnabled(); } return true; }
+  if (isRootColumn()) return false;
   if (state.route === 'campaign') { restoreScreen(state.campaignReturn); return true; }
   if (state.route === 'account-management') { restoreScreen(state.accountReturn); return true; }
   if (state.route === 'settings') { restoreScreen(state.settingsReturn); return true; }
@@ -1414,7 +1474,10 @@ document.addEventListener('click', async event => {
     if (item) goCampaign(item);
     return;
   }
-  if (event.target.closest('[data-open-update]')) { if (updateAvailable) showUpdate(updateAvailable); else checkUpdate(true); return; }
+  if (event.target.closest('[data-secret-entry]')) { handleVersionTap(); return; }
+  const publicCategory = event.target.closest('[data-public-category]');
+  if (publicCategory) { goCategory(publicCategory.dataset.publicCategory); return; }
+  if (event.target.closest('[data-return-public]')) { await api('leave-private'); location.reload(); return; }
   if (event.target.closest('[data-check-update]')) { checkUpdate(true); return; }
   if (event.target.closest('[data-check-resources]')) {
     const button = event.target.closest('[data-check-resources]');
@@ -1488,7 +1551,7 @@ document.addEventListener('click', async event => {
   const filter = event.target.closest('[data-filter]');
   if (filter) { state.filter = filter.dataset.filter; renderSearch(); return; }
   const slide = event.target.closest('[data-slide]');
-  if (slide) { const target = Number(slide.dataset.slide); changeBanner(target, target > state.banner ? 1 : -1); return; }
+  if (slide) { const target = Number(slide.dataset.slide); changeBanner(target, target > bannerIndex() ? 1 : -1); return; }
   if (event.target.closest('[data-back]')) { window.hgBack(); return; }
   const episode = event.target.closest('[data-episode]');
   if (episode) { openPlayer(Number(episode.dataset.episode)); return; }
@@ -1552,11 +1615,11 @@ content.addEventListener('touchend', event => {
   if (heroTouch.moved || Math.abs(move) > 10 || Math.abs(vertical) > 10) heroSuppressClickUntil = performance.now() + 400;
   heroTouch = null;
   scheduleBannerAuto();
-  if (Math.abs(move) < 55 || Math.abs(move) <= Math.abs(vertical) || !state.home) return;
-  const count = homeSlides().length;
+  if (Math.abs(move) < 55 || Math.abs(move) <= Math.abs(vertical) || !isBannerRoute()) return;
+  const count = bannerSlides().length;
   if (!count) return;
   const direction = move < 0 ? 1 : -1;
-  changeBanner((state.banner + direction + count) % count, direction);
+  changeBanner((bannerIndex() + direction + count) % count, direction);
 }, { passive: true });
 content.addEventListener('touchcancel', () => {
   if (!heroTouch) return;
@@ -1572,14 +1635,10 @@ api('app-version').then(version => {
 }).catch(() => {});
 api('cached-update').then(result => { if (result.status === 'available') setAvailableUpdate(result); }).catch(() => {});
 function startHome() { goHome(); setTimeout(() => checkUpdate(false), 3000); }
-document.getElementById('age-confirm').addEventListener('click', () => { localStorage.setItem('adult-confirmed', '1'); api('confirm-age').catch(() => {}); document.getElementById('age-gate').hidden = true; startHome(); });
-document.getElementById('age-exit').addEventListener('click', () => api('quit'));
-api('age-status').then(confirmed => {
-  if (confirmed || localStorage.getItem('adult-confirmed') === '1') {
-    document.getElementById('age-gate').hidden = true;
-    startHome();
-  } else document.getElementById('age-gate').hidden = false;
-}).catch(() => { if (localStorage.getItem('adult-confirmed') === '1') startHome(); else document.getElementById('age-gate').hidden = false; });
+document.getElementById('age-confirm').addEventListener('click', async () => { await api('confirm-private-age'); location.reload(); });
+document.getElementById('age-exit').textContent = '返回红果';
+document.getElementById('age-exit').addEventListener('click', () => { document.getElementById('age-gate').hidden = true; });
+contentReady.then(() => startHome()).catch(error => renderError(error, 'home'));
 
 let pendingResourceRevision = 0;
 let resourceApplyTimer = null;
@@ -1589,7 +1648,7 @@ const resourceIdleMs = 3000;
 window.hgCanApplyHotUpdate = () => ['home', 'settings'].includes(state.route)
   && !document.hidden && document.hasFocus()
   && (state.route !== 'home' || scroll.scrollTop <= 4)
-  && authOverlay.hidden && confirmOverlay.hidden && updateOverlay.hidden
+  && authOverlay.hidden && confirmOverlay.hidden && updateOverlay.hidden && unlockOverlay.hidden
   && document.getElementById('age-gate').hidden
   && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)
   && !bannerChanging && !heroTouch && !predictivePreview && !predictiveFrame
@@ -1626,6 +1685,8 @@ window.hgRefreshPendingResources = () => {
   if (!document.hidden && document.hasFocus()) api('hot-update-status').then(window.hgHotUpdateStatus).catch(() => {});
 };
 window.hgHotUpdateStatus = result => {
+  const resourceSection = content.querySelector('[data-resource-status]')?.closest('section');
+  if (resourceSection && result.enabled === false) resourceSection.hidden = true;
   const label = content.querySelector('[data-resource-status]');
   if (label) label.textContent = result.pending ? '资源已下载，首页空闲时自动启用。' : '当前资源：' + (result.version || '内置') + '，后台自动更新。';
   const apply = content.querySelector('[data-apply-resources]');
@@ -1649,3 +1710,43 @@ document.addEventListener('visibilitychange', () => {
 });
 api('hot-update-status').then(window.hgHotUpdateStatus).catch(() => {});
 window.hgBootReady?.();
+
+
+let versionTapCount = 0, versionTapAt = 0;
+function closeUnlock() {
+  unlockOverlay.hidden = true;
+  updateBackEnabled();
+  document.getElementById('unlock-password').value = '';
+  content.querySelector('[data-secret-entry]')?.focus();
+}
+async function enterPrivate(password = '') {
+  const result = await api('enter-private', { password });
+  closeUnlock();
+  if (result.needsAgeConfirmation) document.getElementById('age-gate').hidden = false;
+  else location.reload();
+}
+async function handleVersionTap() {
+  const now = performance.now();
+  versionTapCount = now - versionTapAt <= 1500 ? versionTapCount + 1 : 1;
+  versionTapAt = now;
+  if (versionTapCount < 5) return;
+  versionTapCount = 0;
+  if (privateMode()) return;
+  try {
+    const status = await api('content-status');
+    if (status.unlocked) { await enterPrivate(); return; }
+    document.getElementById('unlock-error').hidden = true;
+    unlockOverlay.hidden = false;
+    updateBackEnabled();
+    document.getElementById('unlock-password').focus();
+  } catch (error) { toast(error.message, true); }
+}
+document.getElementById('unlock-close').addEventListener('click', closeUnlock);
+document.getElementById('unlock-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.target.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try { await enterPrivate(document.getElementById('unlock-password').value); }
+  catch (error) { const label = document.getElementById('unlock-error'); label.textContent = error.message; label.hidden = false; }
+  finally { button.disabled = false; }
+});

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
   <meta name="color-scheme" content="light dark">
-  <title>黄果短剧</title>
+  <title>橙子短剧</title>
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -32,7 +32,7 @@
     <div id="auth-overlay" hidden>
       <section class="auth-panel" role="dialog" aria-modal="true" aria-labelledby="auth-title">
         <button id="auth-close" class="auth-close" type="button" aria-label="关闭">×</button>
-        <h2 id="auth-title">登录黄果账号</h2>
+        <h2 id="auth-title">登录应用账号</h2>
         <p>登录后同步收藏和观看历史</p>
         <div class="auth-tabs" role="tablist"><button type="button" data-auth-mode="login" class="selected">登录</button><button type="button" data-auth-mode="register">注册</button></div>
         <form id="auth-form">
@@ -42,6 +42,18 @@
           <button id="auth-submit" class="auth-submit" type="submit" aria-live="polite">登录</button>
         </form>
         <p class="auth-footnote">忘记密码请联系管理员重置。</p>
+      </section>
+    </div>
+    <div id="unlock-overlay" hidden>
+      <section class="auth-panel" role="dialog" aria-modal="true" aria-labelledby="unlock-title">
+        <button id="unlock-close" class="auth-close" type="button" aria-label="关闭">×</button>
+        <h2 id="unlock-title">验证访问密码</h2>
+        <form id="unlock-form">
+          <label for="unlock-password">密码</label>
+          <input id="unlock-password" type="password" autocomplete="off" required>
+          <p id="unlock-error" class="auth-error" role="alert" hidden></p>
+          <button class="auth-submit" type="submit">进入</button>
+        </form>
       </section>
     </div>
     <div id="confirm-overlay" hidden>

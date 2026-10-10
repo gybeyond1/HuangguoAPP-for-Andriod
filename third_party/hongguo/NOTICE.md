@@ -1,0 +1,8 @@
+# 红果内容接入来源
+
+来源：N3urda/hongguoTV，提交 eea73e6a45569a2cbbb9440f7cd5290c459b0b70。
+上游：https://github.com/N3urda/hongguoTV
+
+这里保留其 Kotlin 内容接口、请求签名、地址与密钥解析、MP4 分段媒体处理代码。代码按 GPL-3.0-only 提供；签名与媒体算法上游来源为 drpys（提交 22261adfa31435e3b3ef5a730b8a2a75bcaf1715）。本版 Android 派生应用按 GPL-3.0-only 提供，发布 APK 时提供对应完整源码和构建说明。
+
+本目录代码保持上游内容接入流程。界面、手机播放器操作及双模式适配由本项目提供。Kotlin 代码通过 Android Studio 自带编译器或 KOTLIN_HOME 指定的编译器生成 JVM 库，构建脚本见 scripts/build-hongguo-core.py。

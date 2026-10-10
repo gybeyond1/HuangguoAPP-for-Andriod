@@ -48,7 +48,7 @@ public final class MainActivity extends Activity {
     private final ExecutorService requests = Executors.newFixedThreadPool(4);
     private WebView webView;
     private FrameLayout root;
-    private SiteRepository repository;
+    private DualContentRepository repository;
     private AppStore store;
     private AccountService account;
     private UpdateManager updates;
@@ -72,9 +72,10 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        ContentMode.get(this).startPublic();
         hotUpdates = HotUpdateManager.get(this);
         hotSession = hotUpdates.beginSession();
-        repository = new SiteRepository(this, hotSession.site);
+        repository = new DualContentRepository(this, ContentMode.get(this).active(), hotSession.site);
         store = new AppStore(this);
         android.content.SharedPreferences hotPrefs = getSharedPreferences("hot-updates", MODE_PRIVATE);
         String previousRules = hotPrefs.getString("siteFingerprint", "");
@@ -206,7 +207,7 @@ public final class MainActivity extends Activity {
         try {
             hotUpdates.rollback(hotSession);
             hotSession = hotUpdates.beginSession();
-            repository = new SiteRepository(this, hotSession.site);
+            repository = new DualContentRepository(this, ContentMode.get(this).active(), hotSession.site);
             store.clearCache();
             getSharedPreferences("hot-updates", MODE_PRIVATE).edit()
                     .putString("siteFingerprint", hotSession.site.fingerprint).apply();
@@ -443,13 +444,41 @@ public final class MainActivity extends Activity {
         super.onDestroy();
     }
 
+    private synchronized void rebindContent() throws Exception {
+        String source = ContentMode.get(this).active();
+        repository = new DualContentRepository(this, source, hotSession.site);
+        store = new AppStore(this, source);
+        account = new AccountService(this, store);
+        ParseUser current = ParseUser.getCurrentUser();
+        store.activateUser(current == null ? "" : current.getObjectId());
+    }
+
     private Object dispatch(String action, JSONObject args) throws Exception {
+        ContentMode mode = ContentMode.get(this);
+        if ("content-status".equals(action)) return mode.status();
+        if ("enter-private".equals(action)) {
+            JSONObject result = mode.enterPrivate(args.optString("password"));
+            if (ContentMode.PRIVATE.equals(mode.active())) rebindContent();
+            return result;
+        }
+        if ("confirm-private-age".equals(action)) {
+            JSONObject result = mode.finishPrivateEntry(); rebindContent(); return result;
+        }
+        if ("leave-private".equals(action)) { mode.startPublic(); rebindContent(); return mode.status(); }
+        // A request keeps its repository and storage together while another request switches modes.
+        final DualContentRepository repository;
+        final AppStore store;
+        final AccountService account;
+        synchronized (this) {
+            if (args.has("source")) mode.require(args.getString("source"));
+            repository = this.repository; store = this.store; account = this.account;
+        }
         switch (action) {
-            case "hot-update-status": return hotUpdates.status();
+            case "hot-update-status": return hotUpdates.status().put("enabled", !HotUpdateManager.INDEX.isEmpty());
             case "check-hot-update": return hotUpdates.check(true);
             case "apply-hot-update": runOnUiThread(this::applyPendingResources); return true;
-            case "age-status": return getSharedPreferences("hot-updates", MODE_PRIVATE).getBoolean("adultConfirmed", false);
-            case "confirm-age": getSharedPreferences("hot-updates", MODE_PRIVATE).edit().putBoolean("adultConfirmed", true).apply(); return true;
+            case "age-status": return ContentMode.PUBLIC.equals(mode.active()) || mode.adultConfirmed();
+            case "confirm-age": mode.confirmAdult(); return true;
             case "hot-ready": {
                 if (!migratingOrigin && args.optLong("revision", -1) == hotSession.revision
                         && hotSession.bootId.equals(args.optString("bootId"))) {
@@ -547,6 +576,7 @@ public final class MainActivity extends Activity {
             case "clear-content-cache": store.clearCache(); repository.clearCovers(); return true;
             case "quit": runOnUiThread(this::finish); return true;
             case "open-player": {
+                args.put("source", mode.active());
                 Intent intent = new Intent(this, PlayerActivity.class);
                 intent.putExtra("payload", args.toString());
                 runOnUiThread(() -> startActivity(intent));

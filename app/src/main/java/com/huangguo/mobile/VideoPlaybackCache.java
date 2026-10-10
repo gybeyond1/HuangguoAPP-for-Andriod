@@ -10,6 +10,12 @@ import androidx.media3.datasource.cache.CacheDataSource;
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor;
 import androidx.media3.datasource.cache.SimpleCache;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
+import androidx.media3.exoplayer.source.MediaSource;
+import androidx.media3.exoplayer.source.ProgressiveMediaSource;
+import androidx.media3.exoplayer.drm.DrmSessionManagerProvider;
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy;
 import java.io.File;
 
 /** Shared by playback, the next episode and seek previews; never caches mutable playlists. */
@@ -27,13 +33,27 @@ final class VideoPlaybackCache {
         return cache;
     }
 
-    static HlsMediaSource.Factory sources(Context context) {
+    static MediaSource.Factory sources(Context context) {
         DataSource.Factory upstream = new DefaultDataSource.Factory(context,
                 new DefaultHttpDataSource.Factory().setConnectTimeoutMs(20_000)
                         .setReadTimeoutMs(25_000).setUserAgent("Mozilla/5.0 (Linux; Android) HuangGuo/0.1"));
         CacheDataSource.Factory cached = new CacheDataSource.Factory().setCache(get(context))
                 .setUpstreamDataSourceFactory(upstream).setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
-        return new HlsMediaSource.Factory(type -> type == C.DATA_TYPE_MANIFEST
+        HlsMediaSource.Factory hls = new HlsMediaSource.Factory(type -> type == C.DATA_TYPE_MANIFEST
                 ? upstream.createDataSource() : cached.createDataSource());
+        ProgressiveMediaSource.Factory mp4 = new ProgressiveMediaSource.Factory(HongguoPlayback.factory());
+        return new MediaSource.Factory() {
+            @Override public MediaSource createMediaSource(MediaItem item) {
+                return item.localConfiguration != null && MimeTypes.VIDEO_MP4.equals(item.localConfiguration.mimeType)
+                        ? mp4.createMediaSource(item) : hls.createMediaSource(item);
+            }
+            @Override public int[] getSupportedTypes() { return new int[]{C.CONTENT_TYPE_HLS, C.CONTENT_TYPE_OTHER}; }
+            @Override public MediaSource.Factory setDrmSessionManagerProvider(DrmSessionManagerProvider provider) {
+                hls.setDrmSessionManagerProvider(provider); mp4.setDrmSessionManagerProvider(provider); return this;
+            }
+            @Override public MediaSource.Factory setLoadErrorHandlingPolicy(LoadErrorHandlingPolicy policy) {
+                hls.setLoadErrorHandlingPolicy(policy); mp4.setLoadErrorHandlingPolicy(policy); return this;
+            }
+        };
     }
 }

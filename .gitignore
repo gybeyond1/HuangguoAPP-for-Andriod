@@ -4,3 +4,6 @@ build/
 app/build/
 local.properties
 *.iml
+
+merge-*.log
+.signing/

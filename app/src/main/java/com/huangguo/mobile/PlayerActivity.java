@@ -86,7 +86,7 @@ public final class PlayerActivity extends Activity {
     private PlayerView activeView;
     private PlayerView standbyView;
     private final Map<String, Bitmap> posterCache = new HashMap<>();
-    private SiteRepository repository;
+    private DualContentRepository repository;
     private AppStore store;
     private ExoPlayer player;
     private ExoPlayer previewPlayer;
@@ -112,6 +112,8 @@ public final class PlayerActivity extends Activity {
     private TextView previewHint;
     private ImageButton volumeButton;
     private ImageButton fullscreenButton;
+    private ImageButton bookmarkButton;
+    private LinearLayout titleBar;
     private LinearLayout controls;
     private FrameLayout miniProgress;
     private View miniProgressFill;
@@ -119,6 +121,7 @@ public final class PlayerActivity extends Activity {
     private boolean controlsShown = true;
     private int controlTransitionToken;
     private LinearLayout episodePanel;
+    private View episodeScrim;
     private TextView episodeTrigger;
     private TextView speedTrigger;
     private View speedScrim;
@@ -134,6 +137,8 @@ public final class PlayerActivity extends Activity {
     private long lastSaved;
     private boolean seeking;
     private String currentSource;
+    private String currentMime = MimeTypes.APPLICATION_M3U8;
+    private String standbyMime = MimeTypes.APPLICATION_M3U8;
     private long previewTarget;
     private long previewBucket = -1;
     private long lastPreviewRequest;
@@ -232,10 +237,11 @@ public final class PlayerActivity extends Activity {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                     OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
         }
-        repository = new SiteRepository(this);
+        repository = new DualContentRepository(this);
         store = new AppStore(this);
         try {
             JSONObject payload = new JSONObject(getIntent().getStringExtra("payload"));
+            ContentMode.get(this).require(payload.optString("source", ContentMode.get(this).active()));
             currentItem = payload.optJSONObject("item");
             if (currentItem == null) throw new IllegalArgumentException("没有影片信息");
             group = payload.optString("group");
@@ -308,6 +314,7 @@ public final class PlayerActivity extends Activity {
                     return;
                 }
                 if (engine != player || currentSource == null || destroyed) return;
+                synchronized (episodeCache) { episodeCache.remove(cacheKey(currentId, currentEpisode)); }
                 cancelPrefetch();
                 if (hasTimeout(error) && sourceRetryCount < 2) {
                     int attempt = ++sourceRetryCount;
@@ -387,7 +394,17 @@ public final class PlayerActivity extends Activity {
         fullscreenButton.setContentDescription(enabled ? "退出全屏" : "全屏");
         updateSystemBars();
         applyFullscreenOrientation();
+        root.requestApplyInsets();
         revealControls();
+    }
+
+    private boolean isLandscapeFullscreen() {
+        return fullscreenMode && getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+    }
+
+    private int collapsedProgressBottomMargin(int navigationInset) {
+        float remainingGap = isLandscapeFullscreen() ? 0.30f : 0.50f;
+        return Math.max(dp(1), Math.round((navigationInset + dp(7)) * remainingGap));
     }
 
     private boolean edgeGestureStart(float y) {
@@ -459,6 +476,7 @@ public final class PlayerActivity extends Activity {
         gesture.setOnTouchListener((target, event) -> handleGesture(event));
 
         LinearLayout top = new LinearLayout(this);
+        titleBar = top;
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.setPadding(dp(4), dp(12), dp(16), dp(10));
         ImageButton back = icon(R.drawable.player_back, "返回详情");
@@ -594,6 +612,22 @@ public final class PlayerActivity extends Activity {
         episodeTrigger.setBackgroundColor(Color.TRANSPARENT);
         episodeTrigger.setOnClickListener(v -> showEpisodes());
         buttons.addView(episodeTrigger, new LinearLayout.LayoutParams(dp(49), dp(38)));
+        bookmarkButton = icon(R.drawable.player_bookmark, "收藏作品");
+        bookmarkButton.setBackgroundColor(Color.TRANSPARENT);
+        bookmarkButton.setOnClickListener(v -> {
+            if (currentItem == null) return;
+            try {
+                boolean saved = store.toggleBookmark(currentItem);
+                updateBookmarkButton();
+                toast(saved ? "已加入收藏" : "已取消收藏");
+                if (com.parse.ParseUser.getCurrentUser() != null) worker.execute(() -> {
+                    try { new AccountService(getApplicationContext(), store).sync(); }
+                    catch (Exception error) { Log.w("HongGuo", "收藏稍后同步", error); }
+                });
+            } catch (Exception error) { toast("收藏未保存，请重试"); }
+            revealControls();
+        });
+        buttons.addView(bookmarkButton, new LinearLayout.LayoutParams(dp(36), dp(38)));
         controls.addView(buttons, new LinearLayout.LayoutParams(-2, dp(52)));
         root.addView(controls, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
         buildSeekPreview();
@@ -605,7 +639,7 @@ public final class PlayerActivity extends Activity {
         FrameLayout.LayoutParams miniParams = new FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM);
         miniParams.leftMargin = dp(5);
         miniParams.rightMargin = dp(5);
-        miniParams.bottomMargin = dp(7);
+        miniParams.bottomMargin = collapsedProgressBottomMargin(0);
         root.addView(miniProgress, miniParams);
         root.setOnApplyWindowInsetsListener((viewRoot, insets) -> {
             int topInset = Build.VERSION.SDK_INT >= 30
@@ -615,6 +649,7 @@ public final class PlayerActivity extends Activity {
             navigationInsetBottom = bottomInset;
             FrameLayout.LayoutParams titleLayout = (FrameLayout.LayoutParams) top.getLayoutParams();
             int titleMargin = Math.max(dp(24), topInset + dp(8));
+            if (isLandscapeFullscreen()) titleMargin = Math.round(titleMargin * 0.50f);
             if (titleLayout.topMargin != titleMargin) {
                 titleLayout.topMargin = titleMargin;
                 top.setLayoutParams(titleLayout);
@@ -625,8 +660,9 @@ public final class PlayerActivity extends Activity {
                 controls.setLayoutParams(controlsLayout);
             }
             FrameLayout.LayoutParams progressLayout = (FrameLayout.LayoutParams) miniProgress.getLayoutParams();
-            if (progressLayout.bottomMargin != bottomInset + dp(7)) {
-                progressLayout.bottomMargin = bottomInset + dp(7);
+            int progressMargin = collapsedProgressBottomMargin(bottomInset);
+            if (progressLayout.bottomMargin != progressMargin) {
+                progressLayout.bottomMargin = progressMargin;
                 miniProgress.setLayoutParams(progressLayout);
             }
             return insets;
@@ -786,7 +822,7 @@ public final class PlayerActivity extends Activity {
             }
         });
         previewPlayer.setMediaItem(new MediaItem.Builder().setUri(currentSource)
-                .setMimeType(MimeTypes.APPLICATION_M3U8).build());
+                .setMimeType(currentMime).build());
         previewPlayer.pause();
         previewPlayer.seekTo(previewBucket);
         previewPlayer.prepare();
@@ -890,6 +926,7 @@ public final class PlayerActivity extends Activity {
         activeFirstFrame = false;
         failedStandbyKey = null;
         currentId = id;
+        updateBookmarkButton();
         title.setText(currentItem.optString("title") + " · 第 " + episode + " 集");
         episodeText.setText(isAiQueue() ? "AI 作品" : "第 " + episode + " 集");
         seekBar.setProgress(0);
@@ -912,6 +949,7 @@ public final class PlayerActivity extends Activity {
             standbyView = oldView;
             player = standbyPlayer;
             currentSource = standbySource;
+            currentMime = standbyMime;
             activeFirstFrame = standbyFirstFrame;
             standbyLoadControl.promote();
             standbyPlayer = null;
@@ -946,8 +984,9 @@ public final class PlayerActivity extends Activity {
                 runOnUiThread(() -> {
                     if (token != loadToken || destroyed || isFinishing()) return;
                     currentSource = ready.optString("source");
+                    currentMime = ready.optString("mimeType", MimeTypes.APPLICATION_M3U8);
                     player.setMediaItem(new MediaItem.Builder().setUri(currentSource).setMediaId(key)
-                            .setMimeType(MimeTypes.APPLICATION_M3U8).build(), resumePosition(id, episode));
+                            .setMimeType(currentMime).build(), resumePosition(id, episode));
                     applyPlaybackSpeed(speedLocked ? 2f : manualSpeed);
                     player.prepare();
                     player.setPlayWhenReady(foreground);
@@ -996,6 +1035,7 @@ public final class PlayerActivity extends Activity {
                             && (player.getDuration() <= 0 || buffered < player.getDuration())) return;
                     standbyKey = key;
                     standbySource = ready.optString("source");
+                    standbyMime = ready.optString("mimeType", MimeTypes.APPLICATION_M3U8);
                     standbyFirstFrame = false;
                     standbyPlayer = createEpisodePlayer(true);
                     standbyPlayer.setVolume(0f);
@@ -1003,7 +1043,7 @@ public final class PlayerActivity extends Activity {
                     standbyView.setAlpha(0f);
                     standbyView.setPlayer(standbyPlayer);
                     standbyPlayer.setMediaItem(new MediaItem.Builder().setUri(standbySource).setMediaId(key)
-                            .setMimeType(MimeTypes.APPLICATION_M3U8).build(), resumePosition(id, next.episode));
+                            .setMimeType(standbyMime).build(), resumePosition(id, next.episode));
                     standbyPlayer.prepare();
                     Log.d("HuangGuoPlayback", "prepare-next " + key);
                 });
@@ -1228,6 +1268,7 @@ public final class PlayerActivity extends Activity {
         background.setStroke(dp(1), 0xFF796D53);
         panel.setBackground(background);
         panel.setElevation(dp(18));
+        panel.setClickable(true);
         TextView heading = label("选集", 20, Color.WHITE);
         heading.setTypeface(null, Typeface.BOLD);
         panel.addView(heading, new LinearLayout.LayoutParams(-1, dp(36)));
@@ -1253,6 +1294,9 @@ public final class PlayerActivity extends Activity {
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(286), -2, Gravity.BOTTOM | Gravity.RIGHT);
         params.bottomMargin = navigationInsetBottom + dp(88);
         params.rightMargin = dp(13);
+        episodeScrim = new View(this);
+        episodeScrim.setOnClickListener(v -> closeEpisodes());
+        root.addView(episodeScrim, new FrameLayout.LayoutParams(-1, -1));
         root.addView(panel, params);
         episodePanel = panel;
         episodesOpen = true;
@@ -1273,6 +1317,10 @@ public final class PlayerActivity extends Activity {
         LinearLayout closing = episodePanel;
         episodePanel = null;
         episodesOpen = false;
+        if (episodeScrim != null) {
+            root.removeView(episodeScrim);
+            episodeScrim = null;
+        }
         episodeTrigger.setText("选集");
         closing.animate().alpha(0).scaleX(.72f).scaleY(.12f).translationY(dp(10)).setDuration(220)
                 .withEndAction(() -> root.removeView(closing)).start();
@@ -1285,6 +1333,25 @@ public final class PlayerActivity extends Activity {
         if (volumeButton != null) volumeButton.setVisibility(landscape ? View.VISIBLE : View.GONE);
         if (volumeSeek != null) volumeSeek.setVisibility(landscape ? View.VISIBLE : View.GONE);
         if (seekBar != null) ((View) seekBar.getParent()).setVisibility(landscape ? View.GONE : View.VISIBLE);
+        if (timeText != null) {
+            LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) timeText.getLayoutParams();
+            params.width = dp(landscape ? 77 : 65);
+            timeText.setLayoutParams(params);
+        }
+        updateTitleVisibility();
+    }
+
+    private void updateBookmarkButton() {
+        if (bookmarkButton == null) return;
+        boolean saved = currentId != null && store.hasBookmark(currentId);
+        bookmarkButton.setImageResource(saved ? R.drawable.player_bookmark_selected : R.drawable.player_bookmark);
+        bookmarkButton.setColorFilter(saved ? YELLOW : Color.WHITE);
+        bookmarkButton.setSelected(saved);
+        bookmarkButton.setContentDescription(saved ? "取消收藏" : "收藏作品");
+    }
+
+    private void updateTitleVisibility() {
+        if (titleBar != null) titleBar.setVisibility(isLandscapeFullscreen() && !controlsShown ? View.INVISIBLE : View.VISIBLE);
     }
 
     @Override public void onConfigurationChanged(Configuration configuration) {
@@ -1336,6 +1403,7 @@ public final class PlayerActivity extends Activity {
 
     private void showControlsTransition() {
         controlsShown = true;
+        updateTitleVisibility();
         int token = ++controlTransitionToken;
         controls.animate().cancel();
         miniProgress.animate().cancel();
@@ -1371,6 +1439,7 @@ public final class PlayerActivity extends Activity {
     private void concealControls() {
         if (!controlsShown) return;
         controlsShown = false;
+        updateTitleVisibility();
         int token = ++controlTransitionToken;
         handler.removeCallbacks(hideControls);
         handler.removeCallbacks(hideCenterToggle);
@@ -1412,6 +1481,7 @@ public final class PlayerActivity extends Activity {
         if (controls == null) return;
         if (!controlsShown) showControlsTransition();
         else controls.setVisibility(View.VISIBLE);
+        updateTitleVisibility();
         if (centerToggle != null && loading.getVisibility() != View.VISIBLE && player != null && !player.isPlaying()) {
             centerToggle.setVisibility(View.VISIBLE);
             handler.removeCallbacks(hideCenterToggle);
