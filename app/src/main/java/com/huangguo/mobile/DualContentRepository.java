@@ -26,12 +26,10 @@ final class DualContentRepository {
     JSONObject episode(String id, int number) throws Exception { return privateMode() ? huangguo.episode(id, number) : hongguo.episode(id, number); }
     String coverData(String url) throws Exception { return privateMode() ? huangguo.coverData(url) : hongguo.coverData(url); }
     JSONObject tags() throws Exception {
-        if (!privateMode()) throw new IllegalStateException("当前来源提供短剧与漫剧分类");
-        return huangguo.tags();
+        return privateMode() ? huangguo.tags() : hongguo.tags();
     }
     JSONObject tagListing(String slug, int page) throws Exception {
-        if (!privateMode()) throw new IllegalStateException("当前来源不支持标签筛选");
-        return huangguo.tagListing(slug, page);
+        return privateMode() ? huangguo.tagListing(slug, page) : hongguo.tagListing(slug, page);
     }
     void clearCovers() { if (privateMode()) huangguo.clearCovers(); }
 }

@@ -39,6 +39,10 @@ const popularTags = [
   ['dushi', '都市'], ['xiaoyuan', '校园'], ['gufeng', '古风'], ['haomen', '豪门'],
   ['chuanyue', '穿越'], ['chongsheng', '重生'], ['qihuan', '奇幻'], ['zhichang', '职场']
 ];
+const publicPopularTags = [
+  ['short:romance', '爱情'], ['short:period', '年代'], ['short:comeback', '逆袭'], ['short:suspense', '悬疑'],
+  ['comic:creative', '脑洞'], ['comic:fantasy', '玄幻'], ['comic:apocalypse', '末世'], ['comic:adventure', '冒险']
+];
 const tagGroups = [
   ['popular', '热门类型'], ['story', '故事题材'], ['setting', '场景与身份'],
   ['relationship', '人物与关系'], ['style', '外形风格'], ['plot', '情节元素'], ['other', '更多标签']
@@ -299,9 +303,9 @@ function section(title, items, kind = '') {
   return `<section class="film-section"><div class="section-heading"><h2>${esc(title)}</h2>${kind ? `<button class="more" data-more="${kind}" type="button">更多 ${icon('arrow')}</button>` : ''}</div><div class="film-row">${items.map(itemCard).join('')}</div></section>`;
 }
 function homeTagBar() {
-  if (!privateMode()) return `<nav class="home-tags" aria-label="按类型浏览"><div class="home-tag-scroll"><button type="button" class="home-tag" data-public-category="adult">短剧</button><button type="button" class="home-tag" data-public-category="ai">漫剧</button></div></nav>`;
+  const choices = privateMode() ? popularTags : publicPopularTags;
   return `<nav class="home-tags" aria-label="按类型浏览"><button type="button" class="all-tags-link" data-all-tags="1">全部类型 ${icon('arrow')}</button>
-    <div class="home-tag-scroll">${popularTags.map(([slug, name]) => `<button type="button" class="home-tag" data-tag-slug="${slug}" data-tag-name="${name}">${name}</button>`).join('')}</div></nav>`;
+    <div class="home-tag-scroll">${choices.map(([slug, name]) => `<button type="button" class="home-tag" data-tag-slug="${slug}" data-tag-name="${name}">${name}</button>`).join('')}</div></nav>`;
 }
 
 function homeSignature(data) {
@@ -576,7 +580,8 @@ function renderHome() {
 
 function renderTags() {
   const tags = asArray(state.tags?.items);
-  const groups = tagGroups.map(([id, title]) => {
+  const sections = privateMode() ? tagGroups : [['short', '短剧类型'], ['comic', '漫剧类型']];
+  const groups = sections.map(([id, title]) => {
     const members = tags.filter(tag => tag.group === id);
     if (!members.length) return '';
     return `<section class="tags-group"><h2>${title}</h2><div class="tags-grid">${members.map(tag => {
@@ -585,8 +590,8 @@ function renderTags() {
       return `<button type="button" class="tag-choice ${size}" data-tag-slug="${esc(tag.slug)}" data-tag-name="${esc(name)}">${esc(name)}</button>`;
     }).join('')}</div></section>`;
   }).join('');
-  content.innerHTML = `<div class="tags-page"><div class="tags-heading"><button type="button" data-back="1" aria-label="返回首页">${icon('back')}</button><h1>全部类型</h1><span>${tags.length} 个标签</span></div>
-    <p class="tags-intro">点选标签，发现相关作品</p>${groups}</div>`;
+  content.innerHTML = `<div class="tags-page"><div class="tags-heading"><button type="button" data-back="1" aria-label="返回上一页">${icon('back')}</button><h1>全部类型</h1><span>${tags.length} 个${privateMode() ? '标签' : '大类'}</span></div>
+    <p class="tags-intro">${privateMode() ? '点选标签，发现相关作品' : '按短剧、漫剧大类，发现相关作品'}</p>${groups}</div>`;
 }
 
 function refreshMissingImages(items) {
@@ -780,7 +785,9 @@ function updateListingFooter() {
 function renderListing() {
   const listing = state.listing;
   if (!listing?.items.length && listing?.refreshing) { renderSkeleton(); return; }
-  const title = listing.kind === 'tag-list' ? `#${String(listing.label || listing.slug).replace(/^#+/, '')}` : listing.kind === 'recommend' ? '精选推荐' : privateMode() ? '最近上新' : '热门漫剧';
+  const tagName = String(listing.label || listing.slug).replace(/^#+/, '');
+  const tagTitle = privateMode() ? `#${tagName}` : `${listing.slug?.startsWith('comic:') ? '漫剧' : '短剧'} · ${tagName}`;
+  const title = listing.kind === 'tag-list' ? tagTitle : listing.kind === 'recommend' ? '精选推荐' : privateMode() ? '最近上新' : '热门漫剧';
   const backLabel = listing.kind === 'tag-list' && state.listingReturn?.route === 'tags' ? '返回全部类型' : '返回首页';
   content.innerHTML = `<div class="listing-page"><button class="listing-back" type="button" data-back="1">${icon('back')} ${backLabel}</button>
     <h1>${esc(title)}</h1><p>已显示 ${listing.items.length} 部作品</p>
@@ -1068,7 +1075,7 @@ async function goTag(slug, label) {
   const token = ++routeToken;
   if (state.route !== 'listing' || state.listing?.kind !== 'tag-list' || state.listing?.slug !== slug) state.listingReturn = captureScreen();
   setRoute('listing'); state.tab = 'home'; setNav('home');
-  searchInput.value = `#${String(label).replace(/^#+/, '')}`;
+  searchInput.value = `#${privateMode() ? '' : (slug.startsWith('comic:') ? '漫剧·' : '短剧·')}${String(label).replace(/^#+/, '')}`;
   const refreshing = api('tag-list', { slug, page: 1 });
   const cached = await api('cached', { key: `tag:${slug}:1` }).catch(() => null);
   if (token !== routeToken) return;
@@ -1104,9 +1111,11 @@ async function goTagQuery(query) {
     catch { toast('标签暂时无法加载，请重试', true); return; }
   }
   const normalize = value => String(value || '').replace(/^#+/, '').trim().toLocaleLowerCase();
-  let tag = tags.find(item => normalize(item.name) === normalize(name));
+  const matches = item => normalize(item.name) === normalize(name) || (!privateMode() &&
+    normalize(`${item.group === 'comic' ? '漫剧' : '短剧'}·${item.name}`) === normalize(name));
+  let tag = tags.find(matches);
   if (!tag) {
-    try { const fresh = await api('tags'); state.tags = fresh; tag = asArray(fresh.items).find(item => normalize(item.name) === normalize(name)); }
+    try { const fresh = await api('tags'); state.tags = fresh; tag = asArray(fresh.items).find(matches); }
     catch { /* 已有清单仍可用于搜索 */ }
   }
   if (tag) goTag(tag.slug, tag.name);

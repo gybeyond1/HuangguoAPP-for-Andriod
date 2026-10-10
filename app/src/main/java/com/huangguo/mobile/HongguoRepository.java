@@ -18,6 +18,10 @@ import java.util.concurrent.ConcurrentHashMap;
 final class HongguoRepository {
     private final ContentRepository upstream = new ContentRepository(new OkHttpClient(), System::currentTimeMillis);
     private final Map<String, Detail> details = new ConcurrentHashMap<>();
+    private final HongguoGenres genres = new HongguoGenres(upstream.getHttp());
+
+    JSONObject tags() throws Exception { return genres.tags(); }
+    JSONObject tagListing(String slug, int page) throws Exception { return genres.listing(slug, page); }
 
     private static JSONObject card(Series item, String category) throws Exception {
         JSONArray tags = new JSONArray();
