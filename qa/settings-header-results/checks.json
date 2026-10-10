@@ -1,0 +1,62 @@
+[
+  {
+    "mode": "hongguo",
+    "name": "headerHidden",
+    "passed": true
+  },
+  {
+    "mode": "hongguo",
+    "name": "fullHeight",
+    "passed": true
+  },
+  {
+    "mode": "hongguo",
+    "name": "safeBack",
+    "passed": true
+  },
+  {
+    "mode": "hongguo",
+    "name": "versionEntry",
+    "passed": true
+  },
+  {
+    "mode": "hongguo",
+    "name": "parentHeaderVisibleInPredictiveReturn",
+    "passed": true
+  },
+  {
+    "mode": "hongguo",
+    "name": "libraryHeaderRestored",
+    "passed": true
+  },
+  {
+    "mode": "huangguo",
+    "name": "headerHidden",
+    "passed": true
+  },
+  {
+    "mode": "huangguo",
+    "name": "fullHeight",
+    "passed": true
+  },
+  {
+    "mode": "huangguo",
+    "name": "safeBack",
+    "passed": true
+  },
+  {
+    "mode": "huangguo",
+    "name": "versionEntry",
+    "passed": true
+  },
+  {
+    "mode": "huangguo",
+    "name": "parentHeaderVisibleInPredictiveReturn",
+    "passed": true
+  },
+  {
+    "mode": "huangguo",
+    "name": "libraryHeaderRestored",
+    "passed": true
+  }
+]
