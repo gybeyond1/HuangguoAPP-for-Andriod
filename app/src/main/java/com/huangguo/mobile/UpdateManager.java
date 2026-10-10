@@ -76,7 +76,7 @@ final class UpdateManager {
         String apk = manifest.optString("apk");
         String sha256 = manifest.optString("sha256");
         if (!VERSION.matcher(version).matches() || !tag.equals("v" + version)
-                || !apk.equals("HuangGuo-Android-v" + version + "-release.apk")
+                || !apk.equals("ChengZi-Android-v" + version + "-release.apk")
                 || !sha256.matches("[0-9a-fA-F]{64}") || manifest.optLong("size") <= 0) {
             throw new IllegalStateException("发布信息格式有误");
         }
@@ -147,7 +147,7 @@ final class UpdateManager {
         try {
             File directory = new File(context.getCacheDir(), "updates");
             if (!directory.exists() && !directory.mkdirs()) throw new IllegalStateException("无法创建下载目录");
-            File apk = new File(directory, "HuangGuo-Android-v" + candidate.version + "-release.apk");
+            File apk = new File(directory, "ChengZi-Android-v" + candidate.version + "-release.apk");
             if (apk.isFile() && matchesDigest(apk, candidate.digest)) {
                 progress.onPercent(100);
                 return apk;
@@ -189,7 +189,7 @@ final class UpdateManager {
         HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
         connection.setConnectTimeout(15_000);
         connection.setReadTimeout(30_000);
-        connection.setRequestProperty("User-Agent", "HuangGuo-Android-Updater");
+        connection.setRequestProperty("User-Agent", "ChengZi-Android-Updater");
         connection.setRequestProperty("Accept", "application/json");
         int code = connection.getResponseCode();
         if (code < 200 || code >= 300) {
@@ -203,7 +203,7 @@ final class UpdateManager {
         HttpURLConnection connection = (HttpURLConnection) new URL(MANIFEST_URL).openConnection();
         connection.setConnectTimeout(15_000);
         connection.setReadTimeout(30_000);
-        connection.setRequestProperty("User-Agent", "HuangGuo-Android-Updater");
+        connection.setRequestProperty("User-Agent", "ChengZi-Android-Updater");
         int code = connection.getResponseCode();
         if (code == 404) { connection.disconnect(); return null; }
         if (code < 200 || code >= 300) {

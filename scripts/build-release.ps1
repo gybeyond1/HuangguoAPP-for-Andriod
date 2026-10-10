@@ -37,7 +37,7 @@ try {
     if (-not (Test-Path -LiteralPath $unsigned)) { throw '未找到 Gradle 生成的未签名 APK。' }
     $metadata = Get-Content -LiteralPath (Join-Path $releaseDir 'output-metadata.json') -Raw | ConvertFrom-Json
     $version = $metadata.elements[0].versionName
-    $signed = Join-Path $releaseDir "HuangGuo-Android-v$version-release.apk"
+    $signed = Join-Path $releaseDir "ChengZi-Android-v$version-release.apk"
 
     & $zipalign -f -p 4 $unsigned $aligned
     if ($LASTEXITCODE -ne 0) { throw 'zipalign 失败。' }

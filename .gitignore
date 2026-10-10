@@ -8,3 +8,9 @@ local.properties
 merge-*.log
 .signing/
 outputs/
+
+archives/
+
+verification/
+
+qa/*-browser/
