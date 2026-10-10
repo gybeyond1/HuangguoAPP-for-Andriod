@@ -23,6 +23,7 @@ final class HotUpdateManager {
     static final String INDEX = "https://github.com/MrSsg/HuangguoAPP-HotUpdates/releases/latest/download/hot-update.json";
     static final String UI_URL = "https://appassets.androidplatform.net/assets/app.html";
     static final int BRIDGE_VERSION = 1;
+    private static final long BUNDLED_UI_REVISION = 7;
     private static HotUpdateManager singleton;
     private final Context context;
     private final File root;
@@ -154,8 +155,10 @@ final class HotUpdateManager {
         if (!checking.compareAndSet(false, true)) return status();
         try {
             long now = System.currentTimeMillis();
-            if (!force && now - preferences.getLong("lastCheck", 0) < 5 * 60_000L) return status().put("checking", false);
-            preferences.edit().putLong("lastCheck", now).apply();
+            int apkCode = context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionCode;
+            boolean apkChanged = preferences.getInt("lastApkVersionCode", 0) != apkCode;
+            if (!force && !apkChanged && now - preferences.getLong("lastCheck", 0) < 5 * 60_000L) return status().put("checking", false);
+            preferences.edit().putLong("lastCheck", now).putInt("lastApkVersionCode", apkCode).apply();
             byte[] envelope = download(INDEX, 256 * 1024);
             JSONObject meta = verifyEnvelope(envelope);
             requireCompatible(meta);
@@ -188,7 +191,7 @@ final class HotUpdateManager {
     }
     private void requireCompatible(JSONObject meta) throws Exception {
         int code = context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionCode;
-        if (meta.optInt("contentModeVersion") != 1 || meta.getInt("minVersionCode") > code || meta.getInt("bridgeVersion") != BRIDGE_VERSION
+        if (meta.optLong("revision") < BUNDLED_UI_REVISION || meta.optInt("contentModeVersion") != 1 || meta.getInt("minVersionCode") > code || meta.getInt("bridgeVersion") != BRIDGE_VERSION
                 || meta.optInt("maxVersionCode", Integer.MAX_VALUE) < code)
             throw new IllegalArgumentException("资源包需要更新应用版本");
     }

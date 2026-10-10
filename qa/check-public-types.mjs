@@ -25,7 +25,7 @@ async function until(expression){
 const file=fs.readFileSync('qa/check-dual-mode.mjs','utf8').replaceAll('\r\n','\n');
 const start=file.indexOf('source:`')+8;
 let fixture=file.slice(start,file.indexOf('\n`});',start));
-const catalog=JSON.parse(fs.readFileSync('verification/hongguo-tags/catalog-current.json','utf8'));
+const catalog=JSON.parse(fs.readFileSync('qa/fixtures/hongguo-major-categories.json','utf8'));
 fixture=fixture.replace("if(action==='category') {",`if(action==='tags') value=source==='hongguo'?${JSON.stringify(catalog)}:{items:[{slug:'dushi',name:'都市',group:'popular'},{slug:'chuanyue',name:'穿越',group:'story'}]};
 if(action==='tag-list'){
  window.qaTagRequests ||= [];window.qaTagRequests.push({source,slug:args.slug,page:args.page});

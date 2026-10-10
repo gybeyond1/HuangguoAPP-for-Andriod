@@ -1,0 +1,162 @@
+{"items": [
+  {
+    "name": "爱情",
+    "slug": "short:romance",
+    "group": "short"
+  },
+  {
+    "name": "年代",
+    "slug": "short:period",
+    "group": "short"
+  },
+  {
+    "name": "逆袭",
+    "slug": "short:comeback",
+    "group": "short"
+  },
+  {
+    "name": "传奇",
+    "slug": "short:legend",
+    "group": "short"
+  },
+  {
+    "name": "成长",
+    "slug": "short:growth",
+    "group": "short"
+  },
+  {
+    "name": "家庭",
+    "slug": "short:family",
+    "group": "short"
+  },
+  {
+    "name": "家族",
+    "slug": "short:clan",
+    "group": "short"
+  },
+  {
+    "name": "萌宝",
+    "slug": "short:cute-kids",
+    "group": "short"
+  },
+  {
+    "name": "悬疑",
+    "slug": "short:suspense",
+    "group": "short"
+  },
+  {
+    "name": "惊悚",
+    "slug": "short:thriller",
+    "group": "short"
+  },
+  {
+    "name": "恐怖",
+    "slug": "short:horror",
+    "group": "short"
+  },
+  {
+    "name": "志怪",
+    "slug": "short:supernatural",
+    "group": "short"
+  },
+  {
+    "name": "古装",
+    "slug": "short:costume",
+    "group": "short"
+  },
+  {
+    "name": "玄幻",
+    "slug": "short:fantasy",
+    "group": "short"
+  },
+  {
+    "name": "奇幻",
+    "slug": "short:wonder",
+    "group": "short"
+  },
+  {
+    "name": "都市",
+    "slug": "short:urban",
+    "group": "short"
+  },
+  {
+    "name": "青春",
+    "slug": "short:youth",
+    "group": "short"
+  },
+  {
+    "name": "喜剧",
+    "slug": "short:comedy",
+    "group": "short"
+  },
+  {
+    "name": "科幻",
+    "slug": "short:sci-fi",
+    "group": "short"
+  },
+  {
+    "name": "灾难",
+    "slug": "short:disaster",
+    "group": "short"
+  },
+  {
+    "name": "动作冒险",
+    "slug": "short:action-adventure",
+    "group": "short"
+  },
+  {
+    "name": "战争",
+    "slug": "short:war",
+    "group": "short"
+  },
+  {
+    "name": "综艺",
+    "slug": "short:variety",
+    "group": "short"
+  },
+  {
+    "name": "剧情",
+    "slug": "short:drama",
+    "group": "short"
+  },
+  {
+    "name": "脑洞",
+    "slug": "comic:creative",
+    "group": "comic"
+  },
+  {
+    "name": "玄幻",
+    "slug": "comic:fantasy",
+    "group": "comic"
+  },
+  {
+    "name": "剧情",
+    "slug": "comic:drama",
+    "group": "comic"
+  },
+  {
+    "name": "末世",
+    "slug": "comic:apocalypse",
+    "group": "comic"
+  },
+  {
+    "name": "豪门",
+    "slug": "comic:wealthy-family",
+    "group": "comic"
+  },
+  {
+    "name": "奇幻",
+    "slug": "comic:wonder",
+    "group": "comic"
+  },
+  {
+    "name": "科幻",
+    "slug": "comic:sci-fi",
+    "group": "comic"
+  },
+  {
+    "name": "冒险",
+    "slug": "comic:adventure",
+    "group": "comic"
+  }
+]}
