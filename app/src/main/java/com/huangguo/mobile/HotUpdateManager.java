@@ -23,7 +23,7 @@ final class HotUpdateManager {
     static final String INDEX = "https://github.com/MrSsg/HuangguoAPP-HotUpdates/releases/latest/download/hot-update.json";
     static final String UI_URL = "https://appassets.androidplatform.net/assets/app.html";
     static final int BRIDGE_VERSION = 1;
-    private static final long BUNDLED_UI_REVISION = 10;
+    private static final long BUNDLED_UI_REVISION = 11;
     private static HotUpdateManager singleton;
     private final Context context;
     private final File root;
