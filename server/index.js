@@ -93,6 +93,117 @@ const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '3mb' }));
 
+// 状态页（浏览器直接访问根路径即可看到，含注册/登录在线测试）
+app.get('/', (_req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>橙子短剧后端 · 状态页</title>
+<style>
+:root{--bg:#0f1115;--card:#1a1e26;--line:#2a3040;--fg:#e8ecf3;--mut:#8a93a5;--ok:#37d67a;--err:#ff5c5c;--acc:#f5d782}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:24px;min-height:100vh}
+.wrap{max-width:720px;margin:0 auto}
+h1{font-size:20px;letter-spacing:.5px}
+h2{font-size:15px;margin:18px 0 10px;color:var(--acc)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:14px}
+.row{display:flex;flex-wrap:wrap;gap:8px 24px;align-items:center}
+.k{color:var(--mut);font-size:12px}
+.v{font-weight:600}
+.ok{color:var(--ok)} .err{color:var(--err)}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+input{background:#0d0f13;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:8px 10px;font-size:14px;width:100%}
+button{background:var(--acc);color:#1a1e26;border:none;border-radius:8px;padding:9px 16px;font-size:14px;font-weight:700;cursor:pointer}
+button:active{opacity:.8}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:520px){.g2{grid-template-columns:1fr}}
+pre{white-space:pre-wrap;word-break:break-all;background:#0d0f13;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px;margin-top:10px;max-height:240px;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+td,th{border:1px solid var(--line);padding:6px 8px;text-align:left}
+th{color:var(--mut);font-weight:600}
+a{color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>橙子短剧后端</h1>
+<div class="card">
+<div class="row">
+<span class="k">服务</span><span class="v mono" id="s-service">-</span>
+<span class="k">状态</span><span class="v ok mono" id="s-status">-</span>
+<span class="k">用户数</span><span class="v mono" id="s-users">-</span>
+<span class="k">时间</span><span class="v mono" id="s-time">-</span>
+</div>
+</div>
+<h2>在线测试（注册 / 登录）</h2>
+<div class="card">
+<div class="g2">
+<div><input id="u" placeholder="账号（3–24 位字母数字下划线）" autocomplete="off"></div>
+<div><input id="p" type="password" placeholder="密码（至少 8 位）" autocomplete="new-password"></div>
+</div>
+<div class="row" style="margin-top:10px">
+<button onclick="api('register')">注册</button>
+<button onclick="api('login')">登录</button>
+<button onclick="health()">刷新状态</button>
+</div>
+<pre id="out">等待操作…</pre>
+</div>
+<h2>接口一览</h2>
+<div class="card"><table>
+<tr><th>接口</th><th>说明</th></tr>
+<tr><td class="mono">GET /api/health</td><td>健康检查</td></tr>
+<tr><td class="mono">POST /api/register</td><td>注册，返回 token + 用户</td></tr>
+<tr><td class="mono">POST /api/login</td><td>登录，返回 token + 用户</td></tr>
+<tr><td class="mono">POST /api/logout</td><td>注销（Bearer）</td></tr>
+<tr><td class="mono">POST /api/change-password</td><td>修改密码（Bearer）</td></tr>
+<tr><td class="mono">POST /api/avatar</td><td>上传头像（Bearer）</td></tr>
+<tr><td class="mono">GET /api/library?source=</td><td>拉取片单（Bearer）</td></tr>
+<tr><td class="mono">PUT /api/library</td><td>保存片单（Bearer）</td></tr>
+</table></div>
+<div class="card" style="color:var(--mut);font-size:12px">
+<p>数据目录：<span class="mono" id="s-datadir">-</span>（Docker 卷 <span class="mono">./chengzi-data:/data</span>，备份拷该目录）</p>
+<p style="margin-top:6px">部署文档见 <a href="https://github.com/gybeyond1/HuangguoAPP-for-Andriod/tree/master/server">仓库 server/</a></p>
+</div>
+</div>
+<script>
+const out=document.getElementById('out');
+async function health(){
+  try{
+    const r=await fetch('/api/health');const d=await r.json();
+    document.getElementById('s-service').textContent=d.service;
+    document.getElementById('s-status').textContent=d.status==='ok'?'正常':'异常';
+    document.getElementById('s-time').textContent=new Date(d.time).toLocaleString();
+    const users=await fetch('/api/stats').then(x=>x.json());
+    document.getElementById('s-users').textContent=users.users;
+    document.getElementById('s-datadir').textContent=users.dataDir;
+    out.textContent='状态正常，服务 '+d.service;
+  }catch(e){document.getElementById('s-status').textContent='异常';out.textContent='连接失败: '+e.message}
+}
+async function api(kind){
+  const u=document.getElementById('u').value.trim(),p=document.getElementById('p').value;
+  out.textContent='请求中…';
+  try{
+    const r=await fetch('/api/'+kind,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const d=await r.json().catch(()=>({}));
+    out.textContent=r.ok
+      ? (kind==='register'?'注册成功：':'登录成功：')+'\\n'+JSON.stringify(d,null,2)
+      : (r.status+' '+(d.error||'请求失败'));
+  }catch(e){out.textContent='请求失败: '+e.message}
+}
+health();
+</script>
+</body>
+</html>`);
+});
+
+// 状态统计（状态页用）
+app.get('/api/stats', (_req, res) => {
+  res.json({ service: 'chengzi-backend', status: 'ok', users: Object.keys(users).length, dataDir: DATA_DIR });
+});
+
 // 健康检查
 app.get('/api/health', (_req, res) => {
   res.json({ code: 200, service: 'chengzi-backend', status: 'ok', time: Date.now() });
