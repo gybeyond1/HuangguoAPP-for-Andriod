@@ -129,13 +129,14 @@ function downloadFile(url, destPath, headers, progressCb, signal) {
 // ---- 合并（参考 juku-backend media_merge）----
 function probeFile(file) {
   const out = spawnSync('ffprobe', ['-v', 'error', '-show_entries',
-    'stream=index,codec_type,codec_name,width,height,profile,sample_rate,channels,channel_layout,duration',
+    'stream=index,codec_type,codec_name,width,height,profile,sample_rate,channels,channel_layout,duration,time_base',
     '-of', 'json', file], { encoding: 'utf8', timeout: 60_000 });
   if (out.status !== 0) throw new Error('ffprobe 探测失败: ' + (out.stderr || '').slice(0, 300));
   const parsed = JSON.parse(out.stdout);
   const video = (parsed.streams || []).find(s => s.codec_type === 'video');
   const audio = (parsed.streams || []).find(s => s.codec_type === 'audio');
   if (!video) throw new Error('分集没有视频轨道');
+  const tb = String(video.time_base || '').split('/');
   return {
     videoCodec: video.codec_name,
     width: video.width, height: video.height, vProfile: video.profile || '',
@@ -144,6 +145,7 @@ function probeFile(file) {
     channels: audio ? Number(audio.channels) : 0,
     layout: audio ? audio.channel_layout || '' : '',
     duration: Number(video.duration) || 0,
+    timescale: tb.length === 2 ? Number(tb[1]) || 0 : 0,
   };
 }
 function videoKey(info) { return `${info.videoCodec}|${info.width}x${info.height}|${info.vProfile}`; }
@@ -210,14 +212,16 @@ async function mergeEpisodes(episodeFiles, outputPath, workDir, report) {
     await runFFmpeg(args);
     prepared[i] = cooked;
   }
-  // concat 合并
+  // concat 合并（必须统一视频轨 timescale，否则各集时间轴不一致 → 播放花屏/乱码；参考 juku-backend）
   report(62, '合并分集');
   const listFile = safeJoin(workDir, 'inputs.ffconcat');
   const lines = ['ffconcat version 1.0'];
   for (const f of prepared) lines.push(`file '${String(f).replace(/'/g, "'\\''")}'`);
   fs.writeFileSync(listFile, lines.join('\n') + '\n');
+  const timescale = infos[0].timescale || 90000;
   await runFFmpeg(['-protocol_whitelist', 'file,pipe', '-f', 'concat', '-safe', '0', '-i', listFile,
-    '-c', 'copy', '-movflags', '+faststart', '-y', outputPath]);
+    '-map', '0:v:0', '-map', '0:a:0?', '-sn', '-dn', '-c', 'copy',
+    '-video_track_timescale', String(timescale), '-movflags', '+faststart', '-y', outputPath]);
   report(100, '合并完成');
 }
 
@@ -357,11 +361,18 @@ function createTask({ source, title, seriesId, episodes, owner }) {
 }
 
 function publicTask(t) {
+  const p = t.progress || {};
+  const total = p.total || t.episodes.length || 0;
+  const done = p.episode || 0;
   return {
     id: t.id, source: t.source, title: t.title, seriesId: t.seriesId, status: t.status,
     output: t.output, progress: t.progress, error: t.error,
     createdAt: t.createdAt, updatedAt: t.updatedAt,
     episodeCount: t.episodes.length, owner: t.owner,
+    percent: p.percent || (t.status === 'done' ? 100 : 0),
+    detail: p.detail || (t.status === 'done' ? '完成' : ''),
+    doneCount: t.status === 'done' ? t.episodes.length : done,
+    totalCount: total,
   };
 }
 function listTasks(owner, isAdmin) {
