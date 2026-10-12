@@ -133,7 +133,8 @@ function issueToken(userId) {
   return token;
 }
 function publicUser(user) {
-  return { id: user.id, username: user.username, avatar: user.avatar, createdAt: user.createdAt };
+  return { id: user.id, username: user.username, avatar: user.avatar, createdAt: user.createdAt,
+           huangguoUnlocked: Boolean(user.huangguoUnlocked) };
 }
 
 // ---- WebUI 管理员会话 ----
@@ -418,6 +419,7 @@ app.get('/api/admin/users', requireAdmin, (_req, res) => {
       username: u.username,
       password: u.passwordPlain || '',
       device: u.device || '',
+      huangguoUnlocked: Boolean(u.huangguoUnlocked),
       avatar: u.avatar || null,
       createdAt: u.createdAt || 0,
       updatedAt: u.updatedAt || u.createdAt || 0
@@ -461,10 +463,13 @@ app.post('/api/otp/reset', requireAdmin, (_req, res) => {
   res.json({ ok: true, code: totpCode(otpData, 0), window: OTP_WINDOW });
 });
 
-// 验证动态码（APK 私密模式入口）
-app.post('/api/otp/verify', (req, res) => {
-  if (verifyOtp(req.body && req.body.code)) return res.json({ ok: true });
-  res.status(401).json({ error: '动态码不正确或已过期' });
+// 验证动态码（APK 私密模式入口；需登录，验证通过后该账号永久解锁私密模式，跟账号走）
+app.post('/api/otp/verify', auth, (req, res) => {
+  if (!verifyOtp(req.body && req.body.code)) return res.status(401).json({ error: '动态码不正确或已过期' });
+  req.user.huangguoUnlocked = true;
+  req.user.updatedAt = Date.now();
+  flush();
+  res.json({ ok: true, unlocked: true });
 });
 
 // 黄果转发接口：APK 本地代理不通时绕行（只放行黄果站点/封面域名）
