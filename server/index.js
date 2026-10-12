@@ -34,8 +34,19 @@ const TOKEN_TTL_MS = 90 * 24 * 3600 * 1000; // 90 天
 const MAX_AVATAR_BYTES = 512 * 1024;
 const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const USERNAME_RE = /^[A-Za-z0-9_]{3,24}$/;
-// 开放注册开关：环境变量 REGISTER_OPEN=false/0 时关闭注册（默认开放）
-const REGISTER_OPEN = process.env.REGISTER_OPEN !== 'false' && process.env.REGISTER_OPEN !== '0';
+// 开放注册开关：首次启动用环境变量 REGISTER_OPEN 初始化（默认开放），
+// 之后在 WebUI 管理台实时开关（持久化到 DATA_DIR/settings.json，无需重启/重建）
+let registerOpen = process.env.REGISTER_OPEN !== 'false' && process.env.REGISTER_OPEN !== '0';
+try {
+  const savedSettings = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'settings.json'), 'utf8'));
+  if (typeof savedSettings.registerOpen === 'boolean') registerOpen = savedSettings.registerOpen;
+} catch { /* 首次运行，用环境变量默认值 */ }
+function saveSettings() {
+  const settingsFile = path.join(DATA_DIR, 'settings.json');
+  const tmp = settingsFile + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify({ registerOpen }, null, 2));
+  fs.renameSync(tmp, settingsFile);
+}
 // WebUI 管理员密码（环境变量 ADMIN_PASSWORD 配置，未配置则管理功能不可用）
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const ADMIN_SESSION_TTL_MS = 8 * 3600 * 1000; // 管理员会话 8 小时
@@ -239,6 +250,15 @@ a{color:var(--acc)}
 <button class="ghost" onclick="logout()">退出登录</button>
 </div>
 </div>
+<h2>系统设置</h2>
+<div class="card">
+<div class="row" style="gap:12px;flex-wrap:wrap">
+<label style="cursor:pointer;display:flex;align-items:center;gap:8px"><input type="checkbox" id="reg-open" style="width:18px;height:18px">开放注册（App 端可注册新账号）</label>
+<button onclick="saveRegisterOpen()">保存</button>
+<span id="reg-saved" style="font-size:12px"></span>
+</div>
+<p style="color:var(--mut);font-size:12px;margin-top:8px">开关实时生效并持久化，无需重启容器。</p>
+</div>
 <h2>私密模式动态码（OTP）</h2>
 <div class="card">
 <div class="row">
@@ -312,6 +332,17 @@ async function login(){
     adminToken=d.token; localStorage.setItem('chengziAdmin',adminToken); document.getElementById('admin-pass').value=''; showAdmin();
   }catch(e){ el.textContent='网络错误'; el.hidden=false; }
 }
+async function saveRegisterOpen(){
+  const v=document.getElementById('reg-open').checked;
+  try{
+    const r=await fetch('/api/admin/settings',{method:'PUT',headers:AUTH(),body:JSON.stringify({registerOpen:v})}).then(x=>x.json());
+    const el=document.getElementById('reg-saved');
+    el.textContent=r.ok?('已保存：'+(r.registerOpen?'开放':'关闭')):(r.error||'保存失败');
+    el.style.color=r.ok?'var(--ok)':'var(--bad,#d33)';
+    setTimeout(()=>el.textContent='',2500);
+    loadAll();
+  }catch(e){ document.getElementById('reg-saved').textContent='网络错误'; }
+}
 async function logout(){ try{ await fetch('/api/admin/logout',{method:'POST',headers:AUTH()}); }catch(e){} adminToken=''; localStorage.removeItem('chengziAdmin'); showLogin(); }
 let otpTimer=null;
 async function loadAll(){
@@ -324,6 +355,7 @@ async function loadAll(){
     document.getElementById('s-status').textContent=st.status==='ok'?'正常':'异常';
     document.getElementById('s-users').textContent=st.users;
     document.getElementById('s-register').textContent=st.registerOpen?'开放':'已关闭';
+    document.getElementById('reg-open').checked=Boolean(st.registerOpen);
     document.getElementById('s-time').textContent=new Date(st.time||Date.now()).toLocaleString();
     document.getElementById('s-datadir').textContent=st.dataDir;
     document.getElementById('otp-code').textContent=otp.code;
@@ -442,7 +474,18 @@ app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
 
 // 状态统计（状态页用，需管理员）
 app.get('/api/stats', requireAdmin, (_req, res) => {
-  res.json({ service: 'chengzi-backend', status: 'ok', users: Object.keys(users).length, dataDir: DATA_DIR, registerOpen: REGISTER_OPEN });
+  res.json({ service: 'chengzi-backend', status: 'ok', users: Object.keys(users).length, dataDir: DATA_DIR, registerOpen });
+});
+
+// 管理台设置：开放注册开关（实时生效，持久化到 settings.json，无需重启）
+app.get('/api/admin/settings', requireAdmin, (_req, res) => {
+  res.json({ registerOpen });
+});
+app.put('/api/admin/settings', requireAdmin, (req, res) => {
+  const value = req.body && req.body.registerOpen;
+  registerOpen = value === true || value === 'true' || value === 1 || value === '1';
+  saveSettings();
+  res.json({ ok: true, registerOpen });
 });
 
 // 当前动态码（状态页展示；30 秒轮换一次，需管理员）
@@ -508,14 +551,14 @@ app.get('/api/health', (_req, res) => {
   res.json({ code: 200, service: 'chengzi-backend', status: 'ok', time: Date.now() });
 });
 
-// 注册（密码不限长度：1 位即可；可通过 REGISTER_OPEN=false 关闭注册）
+// 注册（密码不限长度：1 位即可；开关在 WebUI 管理台实时控制，持久化到 settings.json）
 app.post('/api/register', (req, res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
   if (!USERNAME_RE.test(username))
     return res.status(400).json({ error: '账号需为 3–24 位字母、数字或下划线' });
   if (password.length < 1) return res.status(400).json({ error: '密码不能为空' });
-  if (!REGISTER_OPEN) return res.status(403).json({ error: '注册已关闭，请联系管理员' });
+  if (!registerOpen) return res.status(403).json({ error: '注册已关闭，请联系管理员' });
   if (Object.values(users).some(u => u.username === username))
     return res.status(409).json({ error: '该账号已被注册' });
   const user = newUserRecord(username, password, String(req.body.device || ''));
