@@ -25,6 +25,8 @@ const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
+const https = require('https');
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const DATA_DIR = process.env.DATA_DIR || '/data';
@@ -32,6 +34,61 @@ const TOKEN_TTL_MS = 90 * 24 * 3600 * 1000; // 90 天
 const MAX_AVATAR_BYTES = 512 * 1024;
 const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const USERNAME_RE = /^[A-Za-z0-9_]{3,24}$/;
+
+// 黄果站点域名白名单（后端转发接口只允许抓这些域名，避免变成开放代理）
+// 主站为 *.pqhybuxo.cc 系，另含官方备用域名与封面 CDN
+const HUANGGUO_HOST_RE = /(^|\.)(pqhybuxo\.cc|im41z53s\.cc|huangguoju\.com|huangguoai\.com|huang-guo\.pages\.dev|huangguoai\.pages\.dev|wirqed\.cn|fisawck\.cn|tkzdds\.cn)$/i;
+
+// ---- TOTP 动态码（RFC 6238，30 秒窗口，6 位）----
+const OTP_WINDOW = 30; // 秒
+const OTP_DIGITS = 6;
+function base32Decode(input) {
+  const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = 0, value = 0;
+  const out = [];
+  for (const ch of String(input).toUpperCase()) {
+    const idx = ALPHABET.indexOf(ch);
+    if (idx < 0) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) { out.push((value >>> (bits - 8)) & 0xff); bits -= 8; }
+  }
+  return Buffer.from(out);
+}
+function ensureOtpSecret() {
+  const otpFile = path.join(DATA_DIR, 'otp.json');
+  let data = {};
+  try { data = JSON.parse(fs.readFileSync(otpFile, 'utf8')); } catch { /* 首次运行 */ }
+  if (!data.secret) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    let secret = '';
+    for (let i = 0; i < 32; i++) secret += chars[Math.floor(Math.random() * chars.length)];
+    data.secret = secret;
+    data.lastReset = Date.now();
+    const tmp = otpFile + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.renameSync(tmp, otpFile);
+  }
+  return data;
+}
+function totpCode(otpData, windowOffset) {
+  const counter = Math.floor(Date.now() / 1000 / OTP_WINDOW) + windowOffset;
+  const counterBuf = Buffer.alloc(8);
+  counterBuf.writeBigInt64BE(BigInt(counter));
+  const key = base32Decode(otpData.secret);
+  const hmac = crypto.createHmac('sha1', key).update(counterBuf).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  const bin = ((hmac[offset] & 0x7f) << 24) | (hmac[offset + 1] << 16) | (hmac[offset + 2] << 8) | hmac[offset + 3];
+  return String(bin % 1000000).padStart(OTP_DIGITS, '0');
+}
+function verifyOtp(code) {
+  const input = String(code || '').trim();
+  if (!/^\d{6}$/.test(input)) return false;
+  const otpData = ensureOtpSecret();
+  // 容忍 ±1 个窗口，避免手机与服务器时钟轻微偏差
+  for (let w = -1; w <= 1; w++) if (totpCode(otpData, w) === input) return true;
+  return false;
+}
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const AVATAR_DIR = path.join(DATA_DIR, 'avatars');
@@ -138,6 +195,15 @@ a{color:var(--acc)}
 <span class="k">时间</span><span class="v mono" id="s-time">-</span>
 </div>
 </div>
+<h2>私密模式动态码（OTP）</h2>
+<div class="card">
+<div class="row">
+<span class="k">当前动态码</span><span class="v mono" style="font-size:26px;letter-spacing:4px" id="otp-code">------</span>
+<span class="k">剩余</span><span class="v mono" id="otp-remain">-</span>秒
+<button onclick="resetOtp()">重置动态码</button>
+</div>
+<p style="color:var(--mut);font-size:12px;margin-top:8px">APK 私密模式输入这 6 位数字；每 30 秒自动更换。重置后旧码立即失效。</p>
+</div>
 <h2>在线测试（注册 / 登录）</h2>
 <div class="card">
 <div class="g2">
@@ -170,6 +236,29 @@ a{color:var(--acc)}
 </div>
 <script>
 const out=document.getElementById('out');
+let otpTimer=null;
+async function refreshOtp(){
+  try{
+    const d=await fetch('/api/otp').then(r=>r.json());
+    document.getElementById('otp-code').textContent=d.code;
+    document.getElementById('otp-remain').textContent=d.expiresIn;
+  }catch(e){document.getElementById('otp-code').textContent='获取失败'}
+}
+function tickOtp(){
+  const el=document.getElementById('otp-remain');
+  let s=parseInt(el.textContent,10);
+  if(!isNaN(s)){ el.textContent=s>0?s-1:0; if(s<=1) refreshOtp(); }
+}
+otpTimer=setInterval(tickOtp,1000);
+async function resetOtp(){
+  if(!confirm('确定重置动态码？当前码立即失效')) return;
+  try{
+    const d=await fetch('/api/otp/reset',{method:'POST'}).then(r=>r.json());
+    document.getElementById('otp-code').textContent=d.code;
+    document.getElementById('otp-remain').textContent=d.window;
+    out.textContent='动态码已重置';
+  }catch(e){out.textContent='重置失败: '+e.message}
+}
 async function health(){
   try{
     const r=await fetch('/api/health');const d=await r.json();
@@ -202,6 +291,61 @@ health();
 // 状态统计（状态页用）
 app.get('/api/stats', (_req, res) => {
   res.json({ service: 'chengzi-backend', status: 'ok', users: Object.keys(users).length, dataDir: DATA_DIR });
+});
+
+// 当前动态码（状态页展示；30 秒轮换一次）
+app.get('/api/otp', (_req, res) => {
+  const otpData = ensureOtpSecret();
+  res.json({
+    code: totpCode(otpData, 0),
+    window: OTP_WINDOW,
+    expiresIn: OTP_WINDOW - (Math.floor(Date.now() / 1000) % OTP_WINDOW),
+    lastReset: otpData.lastReset || null
+  });
+});
+
+// 重置动态码（重新生成 secret，旧码立即全部失效）
+app.post('/api/otp/reset', (_req, res) => {
+  try { fs.unlinkSync(path.join(DATA_DIR, 'otp.json')); } catch { /* 不存在则直接新建 */ }
+  const otpData = ensureOtpSecret();
+  res.json({ ok: true, code: totpCode(otpData, 0), window: OTP_WINDOW });
+});
+
+// 验证动态码（APK 私密模式入口）
+app.post('/api/otp/verify', (req, res) => {
+  if (verifyOtp(req.body && req.body.code)) return res.json({ ok: true });
+  res.status(401).json({ error: '动态码不正确或已过期' });
+});
+
+// 黄果转发接口：APK 本地代理不通时绕行（只放行黄果站点/封面域名）
+app.get('/api/huangguo-proxy', (req, res) => {
+  const target = String(req.query.url || '');
+  let parsed;
+  try { parsed = new URL(target); } catch { return res.status(400).json({ error: '无效地址' }); }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+    return res.status(400).json({ error: '仅支持 http/https' });
+  if (!HUANGGUO_HOST_RE.test(parsed.hostname))
+    return res.status(403).json({ error: '仅允许黄果站点域名' });
+  const client = parsed.protocol === 'https:' ? https : http;
+  const upstream = client.get(parsed, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
+      'Accept': '*/*'
+    },
+    timeout: 25_000
+  }, (up) => {
+    if (up.statusCode < 200 || up.statusCode >= 300) {
+      up.resume();
+      return res.status(502).json({ error: '上游站点返回 ' + up.statusCode });
+    }
+    res.status(200);
+    const upstreamType = up.headers['content-type'] || 'text/html; charset=utf-8';
+    res.setHeader('Content-Type', upstreamType);
+    res.setHeader('Cache-Control', 'no-store');
+    up.pipe(res);
+  });
+  upstream.on('timeout', () => { upstream.destroy(); res.status(504).json({ error: '上游站点超时' }); });
+  upstream.on('error', () => { if (!res.headersSent) res.status(502).json({ error: '上游站点连接失败' }); });
 });
 
 // 健康检查
