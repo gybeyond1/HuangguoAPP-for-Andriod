@@ -392,7 +392,7 @@ async function loadUsers(){
     rows.innerHTML=d.users.map(u=>{
       const safe=(s)=>{ const div=document.createElement('div'); div.textContent=s; return div.innerHTML; };
       const time=u.createdAt?new Date(u.createdAt).toLocaleString():'-';
-      return '<tr><td class="mono">'+safe(u.username)+'</td><td class="mono">'+safe(u.password)+'</td><td>'+safe(u.device)+'</td><td>'+time+'</td><td><button class="danger" onclick="deleteUser(''+u.id+'',''+safe(u.username).replace(/\\'/g,"\\'" )+'')">删除</button></td></tr>';
+      return '<tr><td class="mono">'+safe(u.username)+'</td><td class="mono">'+safe(u.password)+'</td><td>'+safe(u.device)+'</td><td>'+time+'</td><td><button class="danger" data-del-id="'+u.id+'" data-del-name="'+safe(u.username)+'">删除</button></td></tr>';
     }).join('');
   }catch(e){ rows.innerHTML='<tr><td colspan="5" style="color:var(--mut)">加载失败（登录可能已过期）</td></tr>'; }
 }
@@ -404,6 +404,12 @@ async function deleteUser(id,username){
     loadUsers();
   }catch(e){ out.textContent='删除失败: '+e.message }
 }
+// 用户管理“删除”按钮事件委托（避免内嵌 onclick 的引号转义问题）
+document.addEventListener('click', function(ev){
+  const b=ev.target.closest('[data-del-id]');
+  if(!b) return;
+  deleteUser(b.getAttribute('data-del-id'), b.getAttribute('data-del-name'));
+});
 async function apiTest(kind){
   const u=document.getElementById('u').value.trim(),p=document.getElementById('p').value;
   out.textContent='请求中…';
@@ -411,7 +417,7 @@ async function apiTest(kind){
     const r=await fetch('/api/'+kind,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
     const d=await r.json().catch(()=>({}));
     out.textContent=r.ok
-      ? (kind==='register'?'注册成功：':'登录成功：')+'\n'+JSON.stringify(d,null,2)
+      ? (kind==='register'?'注册成功：':'登录成功：')+'\\n'+JSON.stringify(d,null,2)
       : (r.status+' '+(d.error||'请求失败'));
   }catch(e){ out.textContent='请求失败: '+e.message }
 }
