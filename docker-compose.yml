@@ -1,0 +1,11 @@
+services:
+  chengzi-backend:
+    build: ./server
+    container_name: chengzi-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+    volumes:
+      - ./chengzi-data:/data
+    restart: unless-stopped
