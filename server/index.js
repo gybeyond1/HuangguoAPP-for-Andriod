@@ -27,6 +27,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const downloader = require('./downloader');
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const DATA_DIR = process.env.DATA_DIR || '/data';
@@ -135,7 +136,7 @@ function hashPassword(password, salt) {
 function newUserRecord(username, password, device) {
   const salt = crypto.randomBytes(16).toString('hex');
   return { id: crypto.randomBytes(12).toString('hex'), username, password: hashPassword(password, salt),
-           salt, passwordPlain: password, device: device || '', avatar: null,
+           salt, passwordPlain: password, device: device || '', avatar: null, role: 'user',
            createdAt: Date.now(), updatedAt: Date.now() };
 }
 function issueToken(userId) {
@@ -145,6 +146,7 @@ function issueToken(userId) {
 }
 function publicUser(user) {
   return { id: user.id, username: user.username, avatar: user.avatar, createdAt: user.createdAt,
+           role: user.role === 'admin' ? 'admin' : 'user',
            huangguoUnlocked: Boolean(user.huangguoUnlocked) };
 }
 
@@ -219,6 +221,7 @@ button{background:var(--acc);color:#1a1e26;border:none;border-radius:8px;padding
 button:active{opacity:.8}
 button.ghost{background:transparent;color:var(--mut);border:1px solid var(--line)}
 button.danger{background:var(--err);color:#fff}
+.role-admin{color:#0a6;font-weight:700}.role-user{color:var(--mut)}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media(max-width:520px){.g2{grid-template-columns:1fr}}
 pre{white-space:pre-wrap;word-break:break-all;background:#0d0f13;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px;margin-top:10px;max-height:240px;overflow:auto}
@@ -283,10 +286,10 @@ a{color:var(--acc)}
 </div>
 <h2>用户管理</h2>
 <div class="card">
-<p style="color:var(--mut);font-size:12px;margin:0 0 10px">注册信息以明文展示（用户名 / 密码 / 设备型号），请妥善保管本页面访问权限。</p>
+<p style="color:var(--mut);font-size:12px;margin:0 0 10px">注册信息以明文展示（用户名 / 密码 / 设备型号）。<strong>管理员</strong>可下载到 NAS、免动态码进私密模式；<strong>普通用户</strong>只能下载到手机。</p>
 <div class="scroll-x"><table>
-<thead><tr><th>用户名</th><th>明文密码</th><th>设备型号</th><th>注册时间</th><th>操作</th></tr></thead>
-<tbody id="user-rows"><tr><td colspan="5" style="color:var(--mut)">加载中…</td></tr></tbody>
+<thead><tr><th>用户名</th><th>明文密码</th><th>设备型号</th><th>角色</th><th>注册时间</th><th>操作</th></tr></thead>
+<tbody id="user-rows"><tr><td colspan="6" style="color:var(--mut)">加载中…</td></tr></tbody>
 </table></div>
 </div>
 </div>
@@ -388,13 +391,17 @@ async function loadUsers(){
     const r=await fetch('/api/admin/users',{headers:AUTH()});
     if(!r.ok) throw new Error('unauthorized');
     const d=await r.json();
-    if(!d.users || !d.users.length){ rows.innerHTML='<tr><td colspan="5" style="color:var(--mut)">暂无用户</td></tr>'; return; }
+    if(!d.users || !d.users.length){ rows.innerHTML='<tr><td colspan="6" style="color:var(--mut)">暂无用户</td></tr>'; return; }
     rows.innerHTML=d.users.map(u=>{
       const safe=(s)=>{ const div=document.createElement('div'); div.textContent=s; return div.innerHTML; };
       const time=u.createdAt?new Date(u.createdAt).toLocaleString():'-';
-      return '<tr><td class="mono">'+safe(u.username)+'</td><td class="mono">'+safe(u.password)+'</td><td>'+safe(u.device)+'</td><td>'+time+'</td><td><button class="danger" data-del-id="'+u.id+'" data-del-name="'+safe(u.username)+'">删除</button></td></tr>';
+      const isAdmin=u.role==='admin';
+      const roleBtn=isAdmin
+        ?'<button class="danger" data-role-id="'+u.id+'" data-role-name="'+safe(u.username)+'" data-role-to="user">设为普通用户</button>'
+        :'<button data-role-id="'+u.id+'" data-role-name="'+safe(u.username)+'" data-role-to="admin">设为管理员</button>';
+      return '<tr><td class="mono">'+safe(u.username)+'</td><td class="mono">'+safe(u.password)+'</td><td>'+safe(u.device)+'</td><td><span class="mono '+(isAdmin?'role-admin':'role-user')+'">'+(isAdmin?'管理员':'普通用户')+'</span></td><td>'+time+'</td><td style="white-space:nowrap">'+roleBtn+' <button class="danger" data-del-id="'+u.id+'" data-del-name="'+safe(u.username)+'">删除</button></td></tr>';
     }).join('');
-  }catch(e){ rows.innerHTML='<tr><td colspan="5" style="color:var(--mut)">加载失败（登录可能已过期）</td></tr>'; }
+  }catch(e){ rows.innerHTML='<tr><td colspan="6" style="color:var(--mut)">加载失败（登录可能已过期）</td></tr>'; }
 }
 async function deleteUser(id,username){
   if(!confirm('确定删除用户「'+username+'」？其会话/片单/头像将一并删除，不可恢复')) return;
@@ -404,11 +411,20 @@ async function deleteUser(id,username){
     loadUsers();
   }catch(e){ out.textContent='删除失败: '+e.message }
 }
-// 用户管理“删除”按钮事件委托（避免内嵌 onclick 的引号转义问题）
+async function setUserRole(id,username,role){
+  try{
+    const r=await fetch('/api/admin/users/'+id+'/role',{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},AUTH()),body:JSON.stringify({role})});
+    const d=await r.json().catch(()=>({}));
+    out.textContent=r.ok?('已将「'+username+'」设为'+(role==='admin'?'管理员':'普通用户')):(d.error||'设置失败');
+    loadUsers();
+  }catch(e){ out.textContent='设置失败: '+e.message }
+}
+// 用户管理“删除/角色”按钮事件委托（避免内嵌 onclick 的引号转义问题）
 document.addEventListener('click', function(ev){
   const b=ev.target.closest('[data-del-id]');
-  if(!b) return;
-  deleteUser(b.getAttribute('data-del-id'), b.getAttribute('data-del-name'));
+  if(b){ deleteUser(b.getAttribute('data-del-id'), b.getAttribute('data-del-name')); return; }
+  const rb=ev.target.closest('[data-role-id]');
+  if(rb){ setUserRole(rb.getAttribute('data-role-id'), rb.getAttribute('data-role-name'), rb.getAttribute('data-role-to')); }
 });
 async function apiTest(kind){
   const u=document.getElementById('u').value.trim(),p=document.getElementById('p').value;
@@ -457,6 +473,7 @@ app.get('/api/admin/users', requireAdmin, (_req, res) => {
       username: u.username,
       password: u.passwordPlain || '',
       device: u.device || '',
+      role: u.role === 'admin' ? 'admin' : 'user',
       huangguoUnlocked: Boolean(u.huangguoUnlocked),
       avatar: u.avatar || null,
       createdAt: u.createdAt || 0,
@@ -464,6 +481,19 @@ app.get('/api/admin/users', requireAdmin, (_req, res) => {
     }))
     .sort((a, b) => a.createdAt - b.createdAt);
   res.json({ users: list });
+});
+
+// 设置用户角色（管理员/普通用户；用户管理员可 NAS 下载、免动态码进私密模式）
+app.put('/api/admin/users/:id/role', requireAdmin, (req, res) => {
+  const id = String(req.params.id);
+  const user = users[id];
+  if (!user) return res.status(404).json({ error: '用户不存在' });
+  const role = String((req.body && req.body.role) || '').trim();
+  if (role !== 'admin' && role !== 'user') return res.status(400).json({ error: '角色只能是 admin 或 user' });
+  user.role = role;
+  user.updatedAt = Date.now();
+  flush();
+  res.json({ ok: true, user: publicUser(user) });
 });
 
 // 删除用户（连带其会话、片单、头像）
@@ -513,7 +543,14 @@ app.post('/api/otp/reset', requireAdmin, (_req, res) => {
 });
 
 // 验证动态码（APK 私密模式入口；需登录，验证通过后该账号永久解锁私密模式，跟账号走）
+// 管理员角色免动态码：直接解锁
 app.post('/api/otp/verify', auth, (req, res) => {
+  if (req.user.role === 'admin') {
+    req.user.huangguoUnlocked = true;
+    req.user.updatedAt = Date.now();
+    flush();
+    return res.json({ ok: true, unlocked: true });
+  }
   if (!verifyOtp(req.body && req.body.code)) return res.status(401).json({ error: '动态码不正确或已过期' });
   req.user.huangguoUnlocked = true;
   req.user.updatedAt = Date.now();
@@ -553,8 +590,42 @@ app.get('/api/huangguo-proxy', (req, res) => {
 });
 
 // 健康检查
+// ---- 下载任务（NAS 整剧下载+合并，需登录；管理员会话可见/可删全部）----
+function isAdminRequest(req) {
+  const match = String(req.headers.authorization || '').match(/^Bearer\s+([a-f0-9]{64})$/i);
+  return !!match && (adminSessions[match[1]] || 0) > Date.now();
+}
+app.post('/api/download/tasks', auth, (req, res) => {
+  if (!needUser(req, res)) return;
+  // NAS 下载仅用户管理员（role=admin）可用；普通用户只能下载到手机
+  if (req.user.role !== 'admin') return res.status(403).json({ error: '仅管理员可下载到 NAS' });
+  try {
+    const task = downloader.createTask({
+      source: req.body.source, title: req.body.title, seriesId: req.body.seriesId,
+      episodes: req.body.episodes, owner: req.user.id,
+    });
+    res.json({ task });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/download/tasks', auth, (req, res) => {
+  if (!needUser(req, res)) return;
+  res.json({ tasks: downloader.listTasks(req.user.id, isAdminRequest(req)) });
+});
+app.get('/api/download/tasks/:id', auth, (req, res) => {
+  if (!needUser(req, res)) return;
+  const task = downloader.getTask(req.params.id, req.user.id, isAdminRequest(req));
+  if (!task) return res.status(404).json({ error: '任务不存在' });
+  res.json({ task });
+});
+app.delete('/api/download/tasks/:id', auth, (req, res) => {
+  if (!needUser(req, res)) return;
+  if (!downloader.deleteTask(req.params.id, req.user.id, isAdminRequest(req)))
+    return res.status(404).json({ error: '任务不存在' });
+  res.json({ ok: true });
+});
+
 app.get('/api/health', (_req, res) => {
-  res.json({ code: 200, service: 'chengzi-backend', status: 'ok', time: Date.now() });
+  res.json({ code: 200, service: 'chengzi-backend', status: 'ok', time: Date.now(), download: downloader.status() });
 });
 
 // 注册（密码不限长度：1 位即可；开关在 WebUI 管理台实时控制，持久化到 settings.json）
