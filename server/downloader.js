@@ -4,7 +4,7 @@
  *
  * 职责：NAS 端整剧下载 + 合并。
  *  - 任务由 APK 提交（APK 已用自身解析链路把每集播放地址算好，红果附内容密钥 hex）
- *  - 红果：下载加密 mp4 -> hongguo-decrypt 解密为明文分集
+ *  - 红果：ffmpeg -decryption_key 原生解密下载（与 juku-backend 一致）
  *  - 黄果：直接下载明文分集
  *  - 合并参考 juku-backend：ffprobe 探测各集编码，一致则 concat -c copy 无损合并，
  *    不一致则先逐集统一转码（libx264/aac，中间文件留在 .merge-work 断点续传），再合并。
@@ -16,7 +16,6 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const { spawnSync, spawn } = require('child_process');
-const { decryptMp4File } = require('./hongguo-decrypt');
 
 const DATA_DIR = process.env.DATA_DIR || '/data';
 // 下载合并产物目录：固定 /video，由 docker-compose 挂载 NAS 目录出来（本地测试可用 DOWNLOAD_DIR 覆盖）
@@ -266,7 +265,6 @@ async function runTask(task) {
         const item = queue[next++];
         if (!item) break;
         const { ep, idx } = item;
-        const rawFile = safeJoin(dir, `ep${String(idx + 1).padStart(3, '0')}.enc`);   // 红果加密临时
         const plainFile = safeJoin(dir, `ep${String(idx + 1).padStart(3, '0')}.mp4`); // 明文分集
         task.progress.episode = idx + 1;
         task.progress.detail = `下载第 ${idx + 1}/${queue.length} 集`;
@@ -275,21 +273,34 @@ async function runTask(task) {
         while (attempt <= RETRIES && !signal.aborted) {
           try {
             const started = Date.now();
-            await downloadFile(ep.url, rawFile, headersFor(ep), received => {
-              if (signal.aborted) return;
-              // 当前集按 100MB 均摊粗略进度（无 Content-Length 时后端只给阶段/集数信息）
-              task.progress.percent = Math.min(98, Math.round((downloaded + Math.min(1, received / 1e8)) / queue.length * 100));
-              touch(task);
-            }, signal);
-            const size = fs.statSync(rawFile).size;
             if (ep.key) {
+              // 红果 CENC-AES-CTR：完整下载密文后由 ffmpeg -decryption_key 本地解密（与 juku-backend 一致，
+              // ffmpeg mov demuxer 原生支持 CENC，产物为标准明文 MP4；避免对不支持 Range 的服务器直连拉流）
+              const rawFile = safeJoin(dir, `ep${String(idx + 1).padStart(3, '0')}.enc`);
+              task.progress.detail = `下载第 ${idx + 1} 集`;
+              touch(task);
+              await downloadFile(ep.url, rawFile, headersFor(ep), received => {
+                if (signal.aborted) return;
+                task.progress.percent = Math.min(98, Math.round((downloaded + Math.min(1, received / 1e8)) / queue.length * 100));
+                touch(task);
+              }, signal);
               task.progress.detail = `解密第 ${idx + 1} 集`;
               touch(task);
-              try { decryptMp4File(rawFile, plainFile, Buffer.from(ep.key, 'hex')); }
-              finally { fs.rmSync(rawFile, { force: true }); }
+              try {
+                await runFFmpeg(['-decryption_key', ep.key, '-i', rawFile, '-c', 'copy', '-f', 'mp4', '-y', plainFile]);
+              } finally {
+                fs.rmSync(rawFile, { force: true });
+              }
             } else {
+              const rawFile = safeJoin(dir, `ep${String(idx + 1).padStart(3, '0')}.enc`);
+              await downloadFile(ep.url, rawFile, headersFor(ep), received => {
+                if (signal.aborted) return;
+                task.progress.percent = Math.min(98, Math.round((downloaded + Math.min(1, received / 1e8)) / queue.length * 100));
+                touch(task);
+              }, signal);
               fs.renameSync(rawFile, plainFile);
             }
+            const size = fs.statSync(plainFile).size;
             fileSizes[idx] = size;
             downloaded++;
             task.progress.percent = Math.min(98, Math.round(downloaded / queue.length * 100));
@@ -298,7 +309,7 @@ async function runTask(task) {
             if (Date.now() - started > REDOWNLOAD_TIMEOUT_MS) throw new Error('播放地址超时失效，请重新提交');
             break;
           } catch (err) {
-            fs.rmSync(rawFile, { force: true });
+            fs.rmSync(safeJoin(dir, `ep${String(idx + 1).padStart(3, '0')}.enc`), { force: true });
             fs.rmSync(plainFile, { force: true });
             attempt++;
             if (attempt > RETRIES) throw new Error(`第 ${idx + 1} 集下载失败: ${err.message}`);
