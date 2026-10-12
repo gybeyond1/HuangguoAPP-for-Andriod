@@ -125,10 +125,10 @@ function downloadFile(url, destPath, headers, progressCb, signal) {
   });
 }
 
-// ---- 合并（参考 juku-backend media_merge）----
+// ---- 合并（对照 juku-backend media_merge.go / media_merge_plan.go 完整移植）----
 function probeFile(file) {
   const out = spawnSync('ffprobe', ['-v', 'error', '-show_entries',
-    'stream=index,codec_type,codec_name,width,height,profile,sample_rate,channels,channel_layout,duration,time_base',
+    'stream=index,codec_type,codec_name,width,height,profile,sample_rate,channels,channel_layout,duration,time_base,pix_fmt,codec_tag_string',
     '-of', 'json', file], { encoding: 'utf8', timeout: 60_000 });
   if (out.status !== 0) throw new Error('ffprobe 探测失败: ' + (out.stderr || '').slice(0, 300));
   const parsed = JSON.parse(out.stdout);
@@ -136,27 +136,61 @@ function probeFile(file) {
   const audio = (parsed.streams || []).find(s => s.codec_type === 'audio');
   if (!video) throw new Error('分集没有视频轨道');
   const tb = String(video.time_base || '').split('/');
+  const atb = audio ? String(audio.time_base || '').split('/') : [];
   return {
     videoCodec: video.codec_name,
     width: video.width, height: video.height, vProfile: video.profile || '',
+    vTag: video.codec_tag_string || '',
+    pixFmt: video.pix_fmt || '',
+    videoTB: video.time_base || '',
     audioCodec: audio ? audio.codec_name : null,
+    aProfile: audio ? audio.profile || '' : '',
     sampleRate: audio ? Number(audio.sample_rate) : 0,
     channels: audio ? Number(audio.channels) : 0,
     layout: audio ? audio.channel_layout || '' : '',
+    audioTB: audio ? audio.time_base || '' : '',
     duration: Number(video.duration) || 0,
     timescale: tb.length === 2 ? Number(tb[1]) || 0 : 0,
+    audioTimescale: atb.length === 2 ? Number(atb[1]) || 0 : 0,
   };
 }
-function videoKey(info) { return `${info.videoCodec}|${info.width}x${info.height}|${info.vProfile}`; }
-function audioKey(info) { return `${info.audioCodec}|${info.sampleRate}|${info.channels}|${info.layout}`; }
-function samePlan(infos) {
-  const vk = videoKey(infos[0]);
-  const sameV = infos.every(i => videoKey(i) === vk);
-  const ak = audioKey(infos[0]);
-  const sameA = infos.every(i => audioKey(i) === ak);
-  return { sameV, sameA };
+function videoKey(info) { return `${info.videoCodec}|${info.width}x${info.height}|${info.vProfile}|${info.pixFmt}|${info.vTag}`; }
+function audioKey(info) { return `${info.audioCodec}|${info.aProfile}|${info.sampleRate}|${info.layout}`; }
+function majorityKey(infos, key) {
+  const counts = new Map();
+  for (const info of infos) { const k = key(info); counts.set(k, (counts.get(k) || 0) + 1); }
+  let best = null, bestN = -1;
+  for (const [k, n] of counts) { if (n > bestN) { best = k; bestN = n; } }
+  return best;
+}
+function majorityValue(infos, field, key) {
+  const m = majorityKey(infos, key);
+  for (const info of infos) { if (key(info) === m) return info[field]; }
+  return infos[0] ? infos[0][field] : null;
 }
 const H264_PROFILES = { 'constrained baseline': 'baseline', baseline: 'baseline', main: 'main', high: 'high', 'high 10': 'high10' };
+
+/** 合并计划（对照 juku-backend planMergeMedia）：majority 视频/音频 + 统一 timescale + 逐集 remux/转码判定 */
+function buildPlan(infos) {
+  const vk = majorityKey(infos, videoKey);
+  const plan = { video: vk, timescale: 90000, parameters: false, steps: [] };
+  const tbScale = majorityValue(infos, 'timescale', videoKey);
+  if (tbScale > 0 && tbScale <= 10000000) plan.timescale = tbScale;
+  const videoTB = `1/${plan.timescale}`;
+  const ak = majorityKey(infos.filter(i => i.audioCodec), audioKey) || '';
+  const audioTs = majorityValue(infos.filter(i => i.audioCodec), 'audioTimescale', audioKey) || 0;
+  for (const info of infos) {
+    const step = {
+      video: videoKey(info) !== plan.video,
+      audio: !!info.audioCodec && audioKey(info) !== ak,
+      remux: false,
+    };
+    if (step.video || step.remux || (info.vTag && info.vTag !== infos[0].vTag)) plan.parameters = true;
+    step.remux = info.videoTB !== videoTB || (!!info.audioCodec && info.audioTimescale !== audioTs);
+    plan.steps.push(step);
+  }
+  return plan;
+}
 function runFFmpeg(args, progressCb) {
   return new Promise((resolve, reject) => {
     const proc = spawn('ffmpeg', ['-hide_banner', '-nostdin', '-nostats', '-loglevel', 'error', '-y', ...args]);
@@ -171,7 +205,7 @@ function runFFmpeg(args, progressCb) {
   });
 }
 
-/** 合并分集 -> 单文件。workDir 为 .merge-work 断点续传目录，全部成功后才清理。 */
+/** 合并分集 -> 单文件（对照 juku-backend media_merge.go）。workDir 为 .merge-work 断点续传目录，全部成功后才清理。 */
 async function mergeEpisodes(episodeFiles, outputPath, workDir, report) {
   const infos = [];
   for (let i = 0; i < episodeFiles.length; i++) {
@@ -179,48 +213,64 @@ async function mergeEpisodes(episodeFiles, outputPath, workDir, report) {
     try { infos.push(probeFile(episodeFiles[i])); }
     catch (e) { throw new Error(`第 ${i + 1} 集编码检测失败: ${e.message}`); }
   }
-  const plan = samePlan(infos);
+  const plan = buildPlan(infos);
   const prepared = new Array(episodeFiles.length);
-  const base = infos[0];
-  const targetW = base.width, targetH = base.height;
-  const targetFps = null; // 不强制 fps，保持源帧率
-  const targetSR = base.sampleRate || 44100;
-  const targetCh = base.channels || 2;
-  const h264Profile = H264_PROFILES[base.vProfile?.toLowerCase()] || 'high';
+  const majority = infos.reduce((a, b) => (videoKey(b) === plan.video ? b : a));
+  const targetW = majority.width, targetH = majority.height;
+  const targetSR = majority.sampleRate || 44100;
+  const targetCh = majority.channels || 2;
+  const h264Profile = H264_PROFILES[majority.vProfile?.toLowerCase()] || 'high';
 
   for (let i = 0; i < episodeFiles.length; i++) {
     const info = infos[i];
-    const stepVideo = !plan.sameV;
-    const stepAudio = !plan.sameA;
-    if (!stepVideo && !stepAudio) { prepared[i] = episodeFiles[i]; continue; }
-    // 断点续传：已转码的集直接复用
+    const step = plan.steps[i];
+    if (!step.video && !step.audio && !step.remux) { prepared[i] = episodeFiles[i]; continue; }
+    // 断点续传：已处理的集直接复用
     const cooked = safeJoin(workDir, `ep${String(i + 1).padStart(3, '0')}.mp4`);
     if (fs.existsSync(cooked) && fs.statSync(cooked).size > 1024) { prepared[i] = cooked; continue; }
-    report(5 + Math.round(i * 55 / episodeFiles.length), `统一转码第 ${i + 1} 集（${stepVideo ? '视频' : ''}${stepAudio ? '音轨' : ''}）`);
-    const args = ['-i', episodeFiles[i], '-map', '0:v:0', '-sn', '-dn', '-map_metadata', '-1'];
-    let filter = 'setpts=PTS-STARTPTS,';
-    if (targetW && targetH) {
-      filter += `scale=w='min(iw,${targetW})':h='min(ih,${targetH})':force_original_aspect_ratio=decrease,pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,setsar=1,`;
+    const action = step.video ? '统一转码视频+音轨' : (step.audio ? '统一音轨' : '无损换封装(统一时间基)');
+    report(5 + Math.round(i * 55 / episodeFiles.length), `${action}第 ${i + 1} 集`);
+    const args = ['-i', episodeFiles[i], '-map', '0:v:0', '-sn', '-dn', '-map_metadata', '-1', '-c:v', 'copy'];
+    if (step.video) {
+      let filter = 'setpts=PTS-STARTPTS,';
+      if (targetW && targetH) {
+        filter += `scale=w='min(iw,${targetW})':h='min(ih,${targetH})':force_original_aspect_ratio=decrease,pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,setsar=1,`;
+      }
+      args.push('-vf', filter.slice(0, -1));
+      args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-profile:v', h264Profile, '-pix_fmt', 'yuv420p');
     }
-    args.push('-vf', filter.slice(0, -1));
-    args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-profile:v', h264Profile, '-pix_fmt', 'yuv420p');
-    args.push('-c:a', 'aac', '-b:a', '192k', '-ar', String(targetSR), '-ac', String(targetCh));
-    args.push('-af', `aresample=${targetSR}:async=1:first_pts=0,apad`);
+    if (info.audioCodec) {
+      args.push('-map', '0:a:0');
+      if (step.audio) {
+        args.push('-c:a', 'aac', '-profile:a', 'aac_low', '-b:a', '192k', '-ar', String(targetSR), '-ac', String(targetCh));
+        args.push('-af', `aresample=${targetSR}:async=1:first_pts=0`);
+      } else {
+        args.push('-c:a', 'copy');
+      }
+    } else {
+      args.push('-an');
+    }
+    // 转码时按本集视频时长截断输出，避免 apad 无限补静音导致音画不同步 / ffmpeg 永不结束
+    if (step.video || step.audio) args.push('-t', String(info.duration || 0));
     args.push('-max_muxing_queue_size', '4096');
-    args.push('-f', 'mp4', '-y', cooked);
+    args.push('-video_track_timescale', String(plan.timescale), '-f', 'mp4', '-y', cooked);
     await runFFmpeg(args);
     prepared[i] = cooked;
   }
-  // concat 合并（必须统一视频轨 timescale，否则各集时间轴不一致 → 播放花屏/乱码；参考 juku-backend）
+  // concat 合并（统一 timescale + in-band SPS/PPS(avc3)，播放器 seek 到任意段不乱码；对照 juku-backend）
   report(62, '合并分集');
   const listFile = safeJoin(workDir, 'inputs.ffconcat');
   const lines = ['ffconcat version 1.0'];
   for (const f of prepared) lines.push(`file '${String(f).replace(/'/g, "'\\''")}'`);
   fs.writeFileSync(listFile, lines.join('\n') + '\n');
-  const timescale = infos[0].timescale || 90000;
-  await runFFmpeg(['-protocol_whitelist', 'file,pipe', '-f', 'concat', '-safe', '0', '-i', listFile,
+  const concatArgs = ['-protocol_whitelist', 'file,pipe', '-f', 'concat', '-safe', '0', '-i', listFile,
     '-map', '0:v:0', '-map', '0:a:0?', '-sn', '-dn', '-c', 'copy',
-    '-video_track_timescale', String(timescale), '-movflags', '+faststart', '-y', outputPath]);
+    '-video_track_timescale', String(plan.timescale), '-movflags', '+faststart'];
+  // h264/hevc 产物一律 avc3/hev1（in-band SPS/PPS）：concat 后播放器 seek 到任何段都按帧内参数解码，杜绝快进花屏/乱码
+  if (majority.videoCodec === 'h264') concatArgs.push('-tag:v', 'avc3');
+  else if (majority.videoCodec === 'hevc') concatArgs.push('-tag:v', 'hev1');
+  concatArgs.push('-y', outputPath);
+  await runFFmpeg(concatArgs);
   report(100, '合并完成');
 }
 
