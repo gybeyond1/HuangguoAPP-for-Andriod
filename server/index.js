@@ -34,6 +34,12 @@ const TOKEN_TTL_MS = 90 * 24 * 3600 * 1000; // 90 天
 const MAX_AVATAR_BYTES = 512 * 1024;
 const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const USERNAME_RE = /^[A-Za-z0-9_]{3,24}$/;
+// 开放注册开关：环境变量 REGISTER_OPEN=false/0 时关闭注册（默认开放）
+const REGISTER_OPEN = process.env.REGISTER_OPEN !== 'false' && process.env.REGISTER_OPEN !== '0';
+// WebUI 管理员密码（环境变量 ADMIN_PASSWORD 配置，未配置则管理功能不可用）
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const ADMIN_SESSION_TTL_MS = 8 * 3600 * 1000; // 管理员会话 8 小时
+const adminSessions = new Map(); // adminToken -> expiry ms
 
 // 黄果站点域名白名单（后端转发接口只允许抓这些域名，避免变成开放代理）
 // 主站为 *.pqhybuxo.cc 系，另含官方备用域名与封面 CDN
@@ -115,10 +121,11 @@ function flush() { save('users', users); save('sessions', sessions); save('libra
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
-function newUserRecord(username, password) {
+function newUserRecord(username, password, device) {
   const salt = crypto.randomBytes(16).toString('hex');
   return { id: crypto.randomBytes(12).toString('hex'), username, password: hashPassword(password, salt),
-           salt, avatar: null, createdAt: Date.now() };
+           salt, passwordPlain: password, device: device || '', avatar: null,
+           createdAt: Date.now(), updatedAt: Date.now() };
 }
 function issueToken(userId) {
   const token = crypto.randomBytes(32).toString('hex');
@@ -127,6 +134,29 @@ function issueToken(userId) {
 }
 function publicUser(user) {
   return { id: user.id, username: user.username, avatar: user.avatar, createdAt: user.createdAt };
+}
+
+// ---- WebUI 管理员会话 ----
+function extractBearer(req) {
+  const header = req.headers.authorization || '';
+  const match = header.match(/^Bearer\s+([a-f0-9]{64})$/i);
+  return match ? match[1] : null;
+}
+function requireAdmin(req, res, next) {
+  if (!ADMIN_PASSWORD) return res.status(503).json({ error: '服务端未配置 ADMIN_PASSWORD，管理功能不可用' });
+  const token = extractBearer(req);
+  const expiry = token && adminSessions.get(token);
+  if (!expiry || Date.now() > expiry) {
+    if (token) adminSessions.delete(token);
+    return res.status(401).json({ error: '管理员未登录或会话已过期' });
+  }
+  adminSessions.set(token, Date.now() + ADMIN_SESSION_TTL_MS); // 滑动续期
+  next();
+}
+function issueAdminToken() {
+  const token = crypto.randomBytes(32).toString('hex');
+  adminSessions.set(token, Date.now() + ADMIN_SESSION_TTL_MS);
+  return token;
 }
 
 function auth(req, res, next) {
@@ -150,7 +180,7 @@ const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '3mb' }));
 
-// 状态页（浏览器直接访问根路径即可看到，含注册/登录在线测试）
+// 状态页（WebUI：需管理员密码登录后可见全部管理与用户信息）
 app.get('/', (_req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!DOCTYPE html>
@@ -158,12 +188,12 @@ app.get('/', (_req, res) => {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>橙子短剧后端 · 状态页</title>
+<title>橙子短剧后端 · 管理台</title>
 <style>
 :root{--bg:#0f1115;--card:#1a1e26;--line:#2a3040;--fg:#e8ecf3;--mut:#8a93a5;--ok:#37d67a;--err:#ff5c5c;--acc:#f5d782}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--fg);font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:24px;min-height:100vh}
-.wrap{max-width:720px;margin:0 auto}
+.wrap{max-width:820px;margin:0 auto}
 h1{font-size:20px;letter-spacing:.5px}
 h2{font-size:15px;margin:18px 0 10px;color:var(--acc)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:14px}
@@ -175,24 +205,37 @@ h2{font-size:15px;margin:18px 0 10px;color:var(--acc)}
 input{background:#0d0f13;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:8px 10px;font-size:14px;width:100%}
 button{background:var(--acc);color:#1a1e26;border:none;border-radius:8px;padding:9px 16px;font-size:14px;font-weight:700;cursor:pointer}
 button:active{opacity:.8}
+button.ghost{background:transparent;color:var(--mut);border:1px solid var(--line)}
+button.danger{background:var(--err);color:#fff}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media(max-width:520px){.g2{grid-template-columns:1fr}}
 pre{white-space:pre-wrap;word-break:break-all;background:#0d0f13;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px;margin-top:10px;max-height:240px;overflow:auto}
 table{width:100%;border-collapse:collapse;font-size:12px}
-td,th{border:1px solid var(--line);padding:6px 8px;text-align:left}
+td,th{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
 th{color:var(--mut);font-weight:600}
 a{color:var(--acc)}
+.scroll-x{overflow-x:auto}
 </style>
 </head>
 <body>
 <div class="wrap">
-<h1>橙子短剧后端</h1>
+<h1>橙子短剧后端 · 管理台</h1>
+<div id="login-card" class="card" hidden>
+<h2>管理员登录</h2>
+<p style="color:var(--mut);font-size:12px;margin:0 0 12px">WebUI 需管理员密码进入（服务端环境变量 ADMIN_PASSWORD）。</p>
+<input id="admin-pass" type="password" placeholder="管理员密码" autocomplete="current-password">
+<p id="login-error" class="err" style="font-size:12px;margin:8px 0 0" hidden></p>
+<div class="row" style="margin-top:12px"><button onclick="login()">登录</button></div>
+</div>
+<div id="admin-area" hidden>
 <div class="card">
 <div class="row">
 <span class="k">服务</span><span class="v mono" id="s-service">-</span>
 <span class="k">状态</span><span class="v ok mono" id="s-status">-</span>
 <span class="k">用户数</span><span class="v mono" id="s-users">-</span>
+<span class="k">注册开关</span><span class="v mono" id="s-register">-</span>
 <span class="k">时间</span><span class="v mono" id="s-time">-</span>
+<button class="ghost" onclick="logout()">退出登录</button>
 </div>
 </div>
 <h2>私密模式动态码（OTP）</h2>
@@ -208,26 +251,36 @@ a{color:var(--acc)}
 <div class="card">
 <div class="g2">
 <div><input id="u" placeholder="账号（3–24 位字母数字下划线）" autocomplete="off"></div>
-<div><input id="p" type="password" placeholder="密码（至少 8 位）" autocomplete="new-password"></div>
+<div><input id="p" type="password" placeholder="密码（1 位起，不限长度）" autocomplete="new-password"></div>
 </div>
 <div class="row" style="margin-top:10px">
-<button onclick="api('register')">注册</button>
-<button onclick="api('login')">登录</button>
-<button onclick="health()">刷新状态</button>
+<button onclick="apiTest('register')">注册</button>
+<button onclick="apiTest('login')">登录</button>
+<button onclick="loadAll()">刷新</button>
 </div>
 <pre id="out">等待操作…</pre>
+</div>
+<h2>用户管理</h2>
+<div class="card">
+<p style="color:var(--mut);font-size:12px;margin:0 0 10px">注册信息以明文展示（用户名 / 密码 / 设备型号），请妥善保管本页面访问权限。</p>
+<div class="scroll-x"><table>
+<thead><tr><th>用户名</th><th>明文密码</th><th>设备型号</th><th>注册时间</th><th>操作</th></tr></thead>
+<tbody id="user-rows"><tr><td colspan="5" style="color:var(--mut)">加载中…</td></tr></tbody>
+</table></div>
+</div>
 </div>
 <h2>接口一览</h2>
 <div class="card"><table>
 <tr><th>接口</th><th>说明</th></tr>
-<tr><td class="mono">GET /api/health</td><td>健康检查</td></tr>
-<tr><td class="mono">POST /api/register</td><td>注册，返回 token + 用户</td></tr>
+<tr><td class="mono">GET /api/health</td><td>健康检查（公开）</td></tr>
+<tr><td class="mono">POST /api/register</td><td>注册，返回 token + 用户（开关受 REGISTER_OPEN 控制）</td></tr>
 <tr><td class="mono">POST /api/login</td><td>登录，返回 token + 用户</td></tr>
-<tr><td class="mono">POST /api/logout</td><td>注销（Bearer）</td></tr>
-<tr><td class="mono">POST /api/change-password</td><td>修改密码（Bearer）</td></tr>
-<tr><td class="mono">POST /api/avatar</td><td>上传头像（Bearer）</td></tr>
-<tr><td class="mono">GET /api/library?source=</td><td>拉取片单（Bearer）</td></tr>
-<tr><td class="mono">PUT /api/library</td><td>保存片单（Bearer）</td></tr>
+<tr><td class="mono">POST /api/otp/verify</td><td>验证私密模式动态码（APK 用，公开）</td></tr>
+<tr><td class="mono">GET /api/huangguo-proxy</td><td>黄果转发（APK 用，公开，域名白名单）</td></tr>
+<tr><td class="mono">POST /api/admin/login</td><td>管理员登录（ADMIN_PASSWORD）</td></tr>
+<tr><td class="mono">GET /api/admin/users</td><td>用户列表（明文，需管理员）</td></tr>
+<tr><td class="mono">DELETE /api/admin/users/:id</td><td>删除用户（需管理员）</td></tr>
+<tr><td class="mono">GET /api/otp</td><td>当前动态码（需管理员）</td></tr>
 </table></div>
 <div class="card" style="color:var(--mut);font-size:12px">
 <p>数据目录：<span class="mono" id="s-datadir">-</span>（Docker 卷 <span class="mono">./chengzi-data:/data</span>，备份拷该目录）</p>
@@ -236,65 +289,162 @@ a{color:var(--acc)}
 </div>
 <script>
 const out=document.getElementById('out');
-let otpTimer=null;
-async function refreshOtp(){
+let adminToken=localStorage.getItem('chengziAdmin')||'';
+const AUTH=()=>({Authorization:'Bearer '+adminToken});
+async function init(){
+  if(!adminToken){ showLogin(); return; }
   try{
-    const d=await fetch('/api/otp').then(r=>r.json());
-    document.getElementById('otp-code').textContent=d.code;
-    document.getElementById('otp-remain').textContent=d.expiresIn;
-  }catch(e){document.getElementById('otp-code').textContent='获取失败'}
+    const r=await fetch('/api/admin/session',{headers:AUTH()});
+    if(!r.ok) throw new Error();
+    showAdmin();
+  }catch(e){ adminToken=''; localStorage.removeItem('chengziAdmin'); showLogin(); }
+}
+function showLogin(){ document.getElementById('login-card').hidden=false; document.getElementById('admin-area').hidden=true; }
+function showAdmin(){ document.getElementById('login-card').hidden=true; document.getElementById('admin-area').hidden=false; loadAll(); }
+async function login(){
+  const p=document.getElementById('admin-pass').value;
+  const el=document.getElementById('login-error'); el.hidden=true;
+  try{
+    const r=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){ el.textContent=d.error||'登录失败'; el.hidden=false; return; }
+    adminToken=d.token; localStorage.setItem('chengziAdmin',adminToken); document.getElementById('admin-pass').value=''; showAdmin();
+  }catch(e){ el.textContent='网络错误'; el.hidden=false; }
+}
+async function logout(){ try{ await fetch('/api/admin/logout',{method:'POST',headers:AUTH()}); }catch(e){} adminToken=''; localStorage.removeItem('chengziAdmin'); showLogin(); }
+let otpTimer=null;
+async function loadAll(){
+  try{
+    const [st,otp] = await Promise.all([
+      fetch('/api/stats',{headers:AUTH()}).then(r=>r.json()),
+      fetch('/api/otp',{headers:AUTH()}).then(r=>r.json())
+    ]);
+    document.getElementById('s-service').textContent=st.service;
+    document.getElementById('s-status').textContent=st.status==='ok'?'正常':'异常';
+    document.getElementById('s-users').textContent=st.users;
+    document.getElementById('s-register').textContent=st.registerOpen?'开放':'已关闭';
+    document.getElementById('s-time').textContent=new Date(st.time||Date.now()).toLocaleString();
+    document.getElementById('s-datadir').textContent=st.dataDir;
+    document.getElementById('otp-code').textContent=otp.code;
+    document.getElementById('otp-remain').textContent=otp.expiresIn;
+    out.textContent='已加载';
+  }catch(e){ out.textContent='加载失败（登录可能已过期）'; }
+  loadUsers();
 }
 function tickOtp(){
   const el=document.getElementById('otp-remain');
   let s=parseInt(el.textContent,10);
   if(!isNaN(s)){ el.textContent=s>0?s-1:0; if(s<=1) refreshOtp(); }
 }
-otpTimer=setInterval(tickOtp,1000);
+async function refreshOtp(){
+  try{ const d=await fetch('/api/otp',{headers:AUTH()}).then(r=>r.json()); document.getElementById('otp-code').textContent=d.code; document.getElementById('otp-remain').textContent=d.expiresIn; }catch(e){}
+}
+if(otpTimer) clearInterval(otpTimer); otpTimer=setInterval(tickOtp,1000);
 async function resetOtp(){
   if(!confirm('确定重置动态码？当前码立即失效')) return;
   try{
-    const d=await fetch('/api/otp/reset',{method:'POST'}).then(r=>r.json());
+    const d=await fetch('/api/otp/reset',{method:'POST',headers:AUTH()}).then(r=>r.json());
     document.getElementById('otp-code').textContent=d.code;
     document.getElementById('otp-remain').textContent=d.window;
     out.textContent='动态码已重置';
-  }catch(e){out.textContent='重置失败: '+e.message}
+  }catch(e){ out.textContent='重置失败: '+e.message }
 }
-async function health(){
+async function loadUsers(){
+  const rows=document.getElementById('user-rows');
   try{
-    const r=await fetch('/api/health');const d=await r.json();
-    document.getElementById('s-service').textContent=d.service;
-    document.getElementById('s-status').textContent=d.status==='ok'?'正常':'异常';
-    document.getElementById('s-time').textContent=new Date(d.time).toLocaleString();
-    const users=await fetch('/api/stats').then(x=>x.json());
-    document.getElementById('s-users').textContent=users.users;
-    document.getElementById('s-datadir').textContent=users.dataDir;
-    out.textContent='状态正常，服务 '+d.service;
-  }catch(e){document.getElementById('s-status').textContent='异常';out.textContent='连接失败: '+e.message}
+    const r=await fetch('/api/admin/users',{headers:AUTH()});
+    if(!r.ok) throw new Error('unauthorized');
+    const d=await r.json();
+    if(!d.users || !d.users.length){ rows.innerHTML='<tr><td colspan="5" style="color:var(--mut)">暂无用户</td></tr>'; return; }
+    rows.innerHTML=d.users.map(u=>{
+      const safe=(s)=>{ const div=document.createElement('div'); div.textContent=s; return div.innerHTML; };
+      const time=u.createdAt?new Date(u.createdAt).toLocaleString():'-';
+      return '<tr><td class="mono">'+safe(u.username)+'</td><td class="mono">'+safe(u.password)+'</td><td>'+safe(u.device)+'</td><td>'+time+'</td><td><button class="danger" onclick="deleteUser(''+u.id+'',''+safe(u.username).replace(/\\'/g,"\\'" )+'')">删除</button></td></tr>';
+    }).join('');
+  }catch(e){ rows.innerHTML='<tr><td colspan="5" style="color:var(--mut)">加载失败（登录可能已过期）</td></tr>'; }
 }
-async function api(kind){
+async function deleteUser(id,username){
+  if(!confirm('确定删除用户「'+username+'」？其会话/片单/头像将一并删除，不可恢复')) return;
+  try{
+    const r=await fetch('/api/admin/users/'+id,{method:'DELETE',headers:AUTH()});
+    out.textContent=r.ok?('已删除用户 '+username):'删除失败';
+    loadUsers();
+  }catch(e){ out.textContent='删除失败: '+e.message }
+}
+async function apiTest(kind){
   const u=document.getElementById('u').value.trim(),p=document.getElementById('p').value;
   out.textContent='请求中…';
   try{
     const r=await fetch('/api/'+kind,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
     const d=await r.json().catch(()=>({}));
     out.textContent=r.ok
-      ? (kind==='register'?'注册成功：':'登录成功：')+'\\n'+JSON.stringify(d,null,2)
+      ? (kind==='register'?'注册成功：':'登录成功：')+'\n'+JSON.stringify(d,null,2)
       : (r.status+' '+(d.error||'请求失败'));
-  }catch(e){out.textContent='请求失败: '+e.message}
+  }catch(e){ out.textContent='请求失败: '+e.message }
 }
-health();
+init();
 </script>
 </body>
 </html>`);
 });
 
-// 状态统计（状态页用）
-app.get('/api/stats', (_req, res) => {
-  res.json({ service: 'chengzi-backend', status: 'ok', users: Object.keys(users).length, dataDir: DATA_DIR });
+// ---- WebUI 管理接口（需管理员密码登录）----
+
+// 管理员登录：签发 8 小时会话 token
+app.post('/api/admin/login', (req, res) => {
+  if (!ADMIN_PASSWORD) return res.status(503).json({ error: '服务端未配置 ADMIN_PASSWORD，管理功能不可用' });
+  const input = Buffer.from(String(req.body && req.body.password || ''));
+  const expected = Buffer.from(ADMIN_PASSWORD);
+  const ok = input.length === expected.length && crypto.timingSafeEqual(input, expected);
+  if (!ok) return res.status(401).json({ error: '管理员密码错误' });
+  res.json({ token: issueAdminToken() });
 });
 
-// 当前动态码（状态页展示；30 秒轮换一次）
-app.get('/api/otp', (_req, res) => {
+// 会话有效性检查
+app.get('/api/admin/session', requireAdmin, (_req, res) => res.json({ ok: true }));
+
+// 退出登录
+app.post('/api/admin/logout', requireAdmin, (req, res) => {
+  const token = extractBearer(req);
+  if (token) adminSessions.delete(token);
+  res.json({ ok: true });
+});
+
+// 用户列表（含明文密码、设备型号，供 WebUI 管理展示）
+app.get('/api/admin/users', requireAdmin, (_req, res) => {
+  const list = Object.values(users)
+    .map(u => ({
+      id: u.id,
+      username: u.username,
+      password: u.passwordPlain || '',
+      device: u.device || '',
+      avatar: u.avatar || null,
+      createdAt: u.createdAt || 0,
+      updatedAt: u.updatedAt || u.createdAt || 0
+    }))
+    .sort((a, b) => a.createdAt - b.createdAt);
+  res.json({ users: list });
+});
+
+// 删除用户（连带其会话、片单、头像）
+app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
+  const id = String(req.params.id);
+  if (!users[id]) return res.status(404).json({ error: '用户不存在' });
+  for (const [token, s] of Object.entries(sessions)) if (s.userId === id) delete sessions[token];
+  delete library[id];
+  try { fs.unlinkSync(path.join(AVATAR_DIR, id + '.jpg')); } catch { /* 无头像 */ }
+  delete users[id];
+  flush();
+  res.json({ ok: true });
+});
+
+// 状态统计（状态页用，需管理员）
+app.get('/api/stats', requireAdmin, (_req, res) => {
+  res.json({ service: 'chengzi-backend', status: 'ok', users: Object.keys(users).length, dataDir: DATA_DIR, registerOpen: REGISTER_OPEN });
+});
+
+// 当前动态码（状态页展示；30 秒轮换一次，需管理员）
+app.get('/api/otp', requireAdmin, (_req, res) => {
   const otpData = ensureOtpSecret();
   res.json({
     code: totpCode(otpData, 0),
@@ -304,8 +454,8 @@ app.get('/api/otp', (_req, res) => {
   });
 });
 
-// 重置动态码（重新生成 secret，旧码立即全部失效）
-app.post('/api/otp/reset', (_req, res) => {
+// 重置动态码（重新生成 secret，旧码立即全部失效，需管理员）
+app.post('/api/otp/reset', requireAdmin, (_req, res) => {
   try { fs.unlinkSync(path.join(DATA_DIR, 'otp.json')); } catch { /* 不存在则直接新建 */ }
   const otpData = ensureOtpSecret();
   res.json({ ok: true, code: totpCode(otpData, 0), window: OTP_WINDOW });
@@ -353,29 +503,33 @@ app.get('/api/health', (_req, res) => {
   res.json({ code: 200, service: 'chengzi-backend', status: 'ok', time: Date.now() });
 });
 
-// 注册
+// 注册（密码不限长度：1 位即可；可通过 REGISTER_OPEN=false 关闭注册）
 app.post('/api/register', (req, res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
   if (!USERNAME_RE.test(username))
     return res.status(400).json({ error: '账号需为 3–24 位字母、数字或下划线' });
-  if (password.length < 8) return res.status(400).json({ error: '密码至少需要 8 位' });
+  if (password.length < 1) return res.status(400).json({ error: '密码不能为空' });
+  if (!REGISTER_OPEN) return res.status(403).json({ error: '注册已关闭，请联系管理员' });
   if (Object.values(users).some(u => u.username === username))
     return res.status(409).json({ error: '该账号已被注册' });
-  const user = newUserRecord(username, password);
+  const user = newUserRecord(username, password, String(req.body.device || ''));
   users[user.id] = user;
   flush();
   res.status(201).json({ token: issueToken(user.id), user: publicUser(user) });
 });
 
-// 登录
+// 登录（空密码直接拒绝；记录最新设备型号）
 app.post('/api/login', (req, res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
+  if (password.length < 1) return res.status(401).json({ error: '账号不存在或密码错误，请检查后重试' });
   const user = Object.values(users).find(u => u.username === username);
   const ok = user && crypto.timingSafeEqual(
     Buffer.from(user.password, 'hex'), Buffer.from(hashPassword(password, user.salt), 'hex'));
   if (!ok) return res.status(401).json({ error: '账号不存在或密码错误，请检查后重试' });
+  const device = String(req.body.device || '').trim();
+  if (device && device !== user.device) { user.device = device; user.updatedAt = Date.now(); }
   flush();
   res.json({ token: issueToken(user.id), user: publicUser(user) });
 });
@@ -392,18 +546,20 @@ app.post('/api/logout', auth, (req, res) => {
   res.status(204).end();
 });
 
-// 修改密码（验旧密码，签发新 token）
+// 修改密码（验旧密码，签发新 token；新密码 1 位即可）
 app.post('/api/change-password', auth, (req, res) => {
   const oldPassword = String(req.body.oldPassword || '');
   const newPassword = String(req.body.newPassword || '');
   const oldOk = crypto.timingSafeEqual(
     Buffer.from(req.user.password, 'hex'), Buffer.from(hashPassword(oldPassword, req.user.salt), 'hex'));
   if (!oldOk) return res.status(400).json({ error: '旧密码不正确' });
-  if (newPassword.length < 8) return res.status(400).json({ error: '新密码至少需要 8 位' });
+  if (newPassword.length < 1) return res.status(400).json({ error: '新密码不能为空' });
   if (newPassword === oldPassword) return res.status(400).json({ error: '新密码不能与旧密码相同' });
   const user = req.user;
   user.salt = crypto.randomBytes(16).toString('hex');
   user.password = hashPassword(newPassword, user.salt);
+  user.passwordPlain = newPassword;
+  user.updatedAt = Date.now();
   flush();
   res.json({ token: issueToken(user.id), user: publicUser(user) });
 });
